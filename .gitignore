@@ -1,0 +1,68 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# next.js
+.next/
+out/
+build/
+dist/
+next-env.d.ts
+
+# production / deploy
+.vercel
+
+# testing
+coverage/
+*.lcov
+.nyc_output/
+
+# typescript
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+
+# database — runtime state, never committed.
+# WAL mode produces the -shm/-wal sidecars alongside the main file.
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# env — .env.example IS committed, real credentials are not
+.env
+.env.*
+!.env.example
+
+# logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# caches
+.eslintcache
+.cache/
+.turbo/
+.swc/
+
+# claude code local state (settings.local.json plus its atomic-write temp files)
+.claude/settings.local.json*
+
+# os / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/*
+!.vscode/extensions.json

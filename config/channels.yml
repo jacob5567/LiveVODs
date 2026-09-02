@@ -1,0 +1,20 @@
+# The lineup. This is the one file you edit to change which channels appear
+# in the guide. Run `npm run channels:sync` after editing.
+#
+# Twitch entries are login names, exactly as they appear in twitch.tv/<login>.
+# YouTube entries are handles including the leading @, as in youtube.com/@<handle>.
+#
+# The sync script resolves each to a stable platform id and stores that, so a
+# channel that later renames itself keeps its history.
+
+twitch:
+  - theprimeagen
+  - tsoding
+  - piratesoftware
+  - cohhcarnage
+  - northernlion
+
+youtube:
+  - "@LinusTechTips"
+  - "@Fireship"
+  - "@ThePrimeTimeagen"
