@@ -11,9 +11,10 @@ import { and, eq } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { channels, channelSyncState, type Platform } from '@/drizzle/schema';
 import type { ChannelRef, Connector } from '@/lib/connectors/types';
+import { QuotaExhaustedError } from '@/lib/connectors/youtube';
 import type { Observation } from './reconcile';
 import { reconcile } from './reconcile';
-import { applyWrites, loadWorkingSet } from './persist';
+import { applyWrites, loadWatchRefs, loadWorkingSet } from './persist';
 
 export const LIVE_INTERVAL_MS = 60_000;
 export const SCHEDULE_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -25,7 +26,7 @@ const REQUEST_SPACING_MS = 120;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function enabledChannels(platform: Platform): ChannelRef[] {
-  return db
+  const rows = db
     .select({
       id: channels.id,
       platformChannelId: channels.platformChannelId,
@@ -37,6 +38,9 @@ function enabledChannels(platform: Platform): ChannelRef[] {
     // Rows planted by scripts/seed-demo.ts are not real channels; polling them
     // would report every demo stream as offline and wreck the fixture.
     .filter((c) => !c.platformChannelId.startsWith('demo-'));
+
+  const watchRefs = loadWatchRefs(rows.map((r) => r.id));
+  return rows.map((r) => ({ ...r, watchRefs: watchRefs.get(r.id) ?? [] }));
 }
 
 function commit(observations: Observation[], channelIds: number[], now: Date) {
@@ -105,6 +109,12 @@ async function runPerChannel(
       updated += result.updated;
       touchSyncState(channel.id, field, now);
     } catch (error) {
+      // Quota is exhausted for every remaining channel too, so stop rather than
+      // grinding through the rest to fail identically.
+      if (error instanceof QuotaExhaustedError) {
+        console.warn(`[${connector.platform}] ${field}: stopping, daily quota exhausted`);
+        break;
+      }
       failed += 1;
       console.warn(`[${connector.platform}] ${field} failed for ${channel.login}:`, error);
     }
@@ -136,7 +146,10 @@ function everyMs(label: string, intervalMs: number, task: () => Promise<void>): 
     try {
       await task();
     } catch (error) {
-      console.error(`[poller] ${label} tick failed:`, error);
+      // Expected once a day at worst, and self-healing at the quota reset —
+      // not worth a stack trace.
+      if (error instanceof QuotaExhaustedError) console.warn(`[poller] ${label}: ${error.message}`);
+      else console.error(`[poller] ${label} tick failed:`, error);
     } finally {
       running = false;
     }
@@ -157,8 +170,12 @@ export function startPoller(connectors: Connector[]): () => void {
   for (const connector of connectors) {
     stops.push(
       everyMs(`${connector.platform}:live`, LIVE_INTERVAL_MS, () => runLiveTick(connector)),
-      everyMs(`${connector.platform}:schedule`, SCHEDULE_INTERVAL_MS, () =>
-        runScheduleTick(connector),
+      // YouTube overrides this: for it the schedule pass is also the only way a
+      // new broadcast is discovered, so six hours would be far too slow.
+      everyMs(
+        `${connector.platform}:schedule`,
+        connector.scheduleIntervalMs ?? SCHEDULE_INTERVAL_MS,
+        () => runScheduleTick(connector),
       ),
       everyMs(`${connector.platform}:vod`, VOD_INTERVAL_MS, () => runVodTick(connector)),
     );

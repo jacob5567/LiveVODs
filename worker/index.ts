@@ -14,17 +14,22 @@ async function main(): Promise<void> {
 
   const { db, DATABASE_PATH } = await import('@/lib/db');
   const { TwitchConnector } = await import('@/lib/connectors/twitch');
+  const { YouTubeConnector } = await import('@/lib/connectors/youtube');
+  const { youtubeLedger } = await import('@/lib/ingest/quota');
   const { startPoller } = await import('@/lib/ingest/poller');
   const { migrate } = await import('drizzle-orm/better-sqlite3/migrator');
 
   migrate(db, { migrationsFolder: './drizzle/migrations' });
 
-  const connectors = [TwitchConnector.fromEnv()].filter((c) => c !== null);
+  const quota = youtubeLedger();
+  const connectors = [TwitchConnector.fromEnv(), YouTubeConnector.fromEnv(quota)].filter(
+    (c) => c !== null,
+  );
 
   if (connectors.length === 0) {
     console.error(
       'No connectors configured. Copy .env.example to .env and set\n' +
-        'TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET, or run\n' +
+        'TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET, or YOUTUBE_API_KEY, or run\n' +
         '`npx tsx scripts/seed-demo.ts` to work against fixtures instead.',
     );
     process.exitCode = 1;
@@ -33,7 +38,10 @@ async function main(): Promise<void> {
 
   console.log(
     `worker starting → ${DATABASE_PATH}\n` +
-      `connectors: ${connectors.map((c) => c.platform).join(', ')}`,
+      `connectors: ${connectors.map((c) => c.platform).join(', ')}` +
+      (connectors.some((c) => c.platform === 'youtube')
+        ? `\nyoutube quota remaining today: ${quota.remaining()} units`
+        : ''),
   );
 
   const stop = startPoller(connectors);

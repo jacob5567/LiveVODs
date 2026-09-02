@@ -7,6 +7,27 @@ export interface ChannelRef {
   id: number;
   platformChannelId: string;
   login: string;
+  /**
+   * Platform refs already being tracked for this channel (scheduled or live).
+   *
+   * Twitch ignores this: /helix/streams answers "who is live" for a channel
+   * directly. YouTube has no such endpoint that is affordable — search.list
+   * costs 100 of a 10,000 daily budget — so it re-checks known video ids at 1
+   * unit per 50 instead. The poller supplies these so connectors stay free of
+   * database access.
+   */
+  watchRefs?: string[];
+}
+
+/**
+ * Daily API spend tracking. YouTube allows 10,000 units per day and exhausting
+ * it takes the whole platform offline until the reset, so spend is checked
+ * before every call rather than counted afterwards.
+ */
+export interface QuotaLedger {
+  /** Records the spend and returns false if it would exceed the cap. */
+  trySpend(units: number): boolean;
+  remaining(): number;
 }
 
 /** Result of turning a config identifier into something stable. */
@@ -19,6 +40,13 @@ export interface ResolvedChannel {
 
 export interface Connector {
   readonly platform: Platform;
+
+  /**
+   * Override for how often the schedule pass runs. YouTube needs a shorter
+   * interval than Twitch because for YouTube that pass is also how new
+   * broadcasts are discovered at all.
+   */
+  readonly scheduleIntervalMs?: number;
 
   /**
    * Turn the identifiers in config/channels.yml (Twitch logins, YouTube handles)

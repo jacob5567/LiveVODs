@@ -26,93 +26,113 @@ async function main(): Promise<void> {
   const { db } = await import('@/lib/db');
   const { channels } = await import('@/drizzle/schema');
   const { TwitchConnector } = await import('@/lib/connectors/twitch');
+  const { YouTubeConnector } = await import('@/lib/connectors/youtube');
+  const { MemoryQuotaLedger } = await import('@/lib/ingest/quota');
   const { and, eq } = await import('drizzle-orm');
+  const { migrate } = await import('drizzle-orm/better-sqlite3/migrator');
+
+  migrate(db, { migrationsFolder: './drizzle/migrations' });
 
   const config = parse(readFileSync(CONFIG_PATH, 'utf8')) as ChannelsConfig | null;
-  const twitchLogins = config?.twitch ?? [];
-  const youtubeHandles = config?.youtube ?? [];
+
+  // A memory ledger: a sync is a one-off and should not eat into the worker's
+  // persisted daily budget.
+  const quota = new MemoryQuotaLedger();
+
+  const platforms = [
+    {
+      platform: 'twitch' as const,
+      identifiers: config?.twitch ?? [],
+      connector: TwitchConnector.fromEnv(),
+      missingHint: 'TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET not set',
+    },
+    {
+      platform: 'youtube' as const,
+      identifiers: config?.youtube ?? [],
+      connector: YouTubeConnector.fromEnv(quota),
+      missingHint: 'YOUTUBE_API_KEY not set',
+    },
+  ];
 
   console.log(
-    `${CONFIG_PATH}: ${twitchLogins.length} twitch, ${youtubeHandles.length} youtube` +
+    `${CONFIG_PATH}: ` +
+      platforms.map((p) => `${p.identifiers.length} ${p.platform}`).join(', ') +
       (DRY_RUN ? '  [dry run — nothing will be written]' : ''),
   );
 
-  let resolved = 0;
-  let missing = 0;
   let inserted = 0;
   let updated = 0;
+  let missing = 0;
 
-  if (twitchLogins.length > 0) {
-    const twitch = TwitchConnector.fromEnv();
+  for (const { platform, identifiers, connector, missingHint } of platforms) {
+    if (identifiers.length === 0) continue;
 
-    if (!twitch) {
-      console.error('\n  twitch: skipped — TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET not set');
-      missing += twitchLogins.length;
-    } else {
-      const found = await twitch.resolveChannels(twitchLogins);
-      console.log(`\n  twitch: resolved ${found.size}/${twitchLogins.length}`);
+    if (!connector) {
+      console.error(`\n  ${platform}: skipped — ${missingHint}`);
+      missing += identifiers.length;
+      continue;
+    }
 
-      for (const login of twitchLogins) {
-        const channel = found.get(login.toLowerCase());
+    const found = await connector.resolveChannels(identifiers);
+    console.log(`\n  ${platform}: resolved ${found.size}/${identifiers.length}`);
 
-        if (!channel) {
-          console.log(`    ✗ ${login} — no such channel (typo, renamed, or banned)`);
-          missing += 1;
-          continue;
-        }
+    for (const identifier of identifiers) {
+      const channel = found.get(identifier.toLowerCase());
 
-        resolved += 1;
-        const existing = db
-          .select({ id: channels.id, login: channels.login })
-          .from(channels)
-          .where(
-            and(
-              eq(channels.platform, 'twitch'),
-              eq(channels.platformChannelId, channel.platformChannelId),
-            ),
-          )
-          .get();
+      if (!channel) {
+        console.log(`    ✗ ${identifier} — not found (typo, renamed, or removed)`);
+        missing += 1;
+        continue;
+      }
 
-        const action = existing ? 'update' : 'insert';
-        if (action === 'insert') inserted += 1;
-        else updated += 1;
+      const exists = db
+        .select({ id: channels.id })
+        .from(channels)
+        .where(
+          and(
+            eq(channels.platform, platform),
+            eq(channels.platformChannelId, channel.platformChannelId),
+          ),
+        )
+        .get();
 
-        console.log(
-          `    ✓ ${channel.displayName.padEnd(22)} id=${channel.platformChannelId.padEnd(12)} ${action}`,
-        );
+      if (exists) updated += 1;
+      else inserted += 1;
 
-        if (DRY_RUN) continue;
+      console.log(
+        `    ✓ ${channel.displayName.padEnd(24)} ${channel.platformChannelId.padEnd(26)} ` +
+          `${exists ? 'update' : 'insert'}`,
+      );
 
-        db.insert(channels)
-          .values({
-            platform: 'twitch',
-            platformChannelId: channel.platformChannelId,
+      if (DRY_RUN) continue;
+
+      db.insert(channels)
+        .values({
+          platform,
+          platformChannelId: channel.platformChannelId,
+          login: channel.login,
+          displayName: channel.displayName,
+          avatarUrl: channel.avatarUrl,
+          enabled: true,
+        })
+        .onConflictDoUpdate({
+          target: [channels.platform, channels.platformChannelId],
+          // Deliberately does not touch `enabled`: a channel disabled by hand
+          // stays disabled across syncs.
+          set: {
             login: channel.login,
             displayName: channel.displayName,
             avatarUrl: channel.avatarUrl,
-            enabled: true,
-          })
-          .onConflictDoUpdate({
-            target: [channels.platform, channels.platformChannelId],
-            set: {
-              login: channel.login,
-              displayName: channel.displayName,
-              avatarUrl: channel.avatarUrl,
-            },
-          })
-          .run();
-      }
+          },
+        })
+        .run();
     }
-  }
-
-  if (youtubeHandles.length > 0) {
-    // The YouTube connector arrives in milestone 6.
-    console.log(`\n  youtube: ${youtubeHandles.length} entries skipped — connector not built yet`);
   }
 
   console.log(
     `\n${DRY_RUN ? 'would apply' : 'applied'}: ${inserted} new, ${updated} existing, ` +
-      `${resolved} resolved, ${missing} unresolved`,
+      `${missing} unresolved` +
+      (quota.spent() > 0 ? `  (youtube quota used: ${quota.spent()} units)` : ''),
   );
 }
 

@@ -53,6 +53,37 @@ export function loadWorkingSet(channelIds: number[], now: Date): ProgramRecord[]
     );
 }
 
+/**
+ * Platform refs currently worth re-checking, grouped by channel.
+ *
+ * YouTube has no affordable "is this channel live" endpoint, so it re-checks
+ * known video ids instead. Anything already finished is excluded — its state
+ * cannot change again.
+ */
+export function loadWatchRefs(channelIds: number[]): Map<number, string[]> {
+  const out = new Map<number, string[]>();
+  if (channelIds.length === 0) return out;
+
+  const rows = db
+    .select({ channelId: programs.channelId, platformRef: programs.platformRef })
+    .from(programs)
+    .where(
+      and(
+        inArray(programs.channelId, channelIds),
+        inArray(programs.state, ['scheduled', 'live']),
+      ),
+    )
+    .all();
+
+  for (const row of rows) {
+    const list = out.get(row.channelId);
+    if (list) list.push(row.platformRef);
+    else out.set(row.channelId, [row.platformRef]);
+  }
+
+  return out;
+}
+
 export interface ApplyResult {
   inserted: number;
   updated: number;
