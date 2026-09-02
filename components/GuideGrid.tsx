@@ -5,6 +5,7 @@ import type { Guide, GuideChannel, GuideProgram } from '@/lib/guide';
 import { MINUTE_MS, PX_PER_MINUTE } from '@/lib/time';
 import { ProgramCell } from './ProgramCell';
 import { PlayerPane, type Selection } from './PlayerPane';
+import { useLiveGuide } from './useLiveGuide';
 import styles from './GuideGrid.module.css';
 
 const CHANNEL_COL_W = 210;
@@ -27,15 +28,28 @@ function formatHour(ms: number): string {
 }
 
 export function GuideGrid({
-  guide,
+  guide: initialGuide,
   extraParents = [],
 }: {
   guide: Guide;
   extraParents?: string[];
 }) {
+  const guide = useLiveGuide(initialGuide);
   const scroller = useRef<HTMLDivElement>(null);
   const [now, setNow] = useState(() => Date.now());
   const [selection, setSelection] = useState<Selection | null>(null);
+
+  /**
+   * The selection holds objects captured at click time. Re-resolving them
+   * against the current guide keeps the open player honest — a broadcast that
+   * ends while being watched stops claiming to be live.
+   */
+  const currentSelection = useMemo(() => {
+    if (!selection) return null;
+    const channel = guide.channels.find((c) => c.id === selection.channel.id);
+    const program = channel?.programs.find((p) => p.id === selection.program.id);
+    return channel && program ? { channel, program } : selection;
+  }, [selection, guide]);
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), CLOCK_INTERVAL_MS);
@@ -129,9 +143,9 @@ export function GuideGrid({
     <div className={styles.wrap}>
       <Toolbar liveCount={liveCount} onNow={scrollToNow} onNudge={nudge} />
 
-      {selection && (
+      {currentSelection && (
         <PlayerPane
-          selection={selection}
+          selection={currentSelection}
           extraParents={extraParents}
           onClose={() => setSelection(null)}
         />

@@ -1,4 +1,4 @@
-import { and, asc, gt, lt } from 'drizzle-orm';
+import { and, asc, gt, lt, sql } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { channels, programs, type Platform, type ProgramState } from '@/drizzle/schema';
 import { HOUR_MS } from '@/lib/time';
@@ -40,10 +40,39 @@ export interface Guide {
   channels: GuideChannel[];
 }
 
-export function loadGuide(now: Date = new Date()): Guide {
-  const from = new Date(now.getTime() - GUIDE_PAST_MS);
-  const to = new Date(now.getTime() + GUIDE_FUTURE_MS);
+/**
+ * A cheap token that changes whenever any program does.
+ *
+ * The worker writes and the web process reads, in separate processes with no
+ * channel between them, so the live-update endpoint watches this instead of
+ * being notified. The row count is part of it so that deletions register too,
+ * not just edits.
+ */
+export function guideRevision(): string {
+  const row = db
+    .select({
+      latest: sql<number>`coalesce(max(${programs.updatedAt}), 0)`,
+      count: sql<number>`count(*)`,
+    })
+    .from(programs)
+    .get();
 
+  return `${row?.latest ?? 0}:${row?.count ?? 0}`;
+}
+
+export function loadGuide(now: Date = new Date()): Guide {
+  return loadGuideWindow(
+    new Date(now.getTime() - GUIDE_PAST_MS),
+    new Date(now.getTime() + GUIDE_FUTURE_MS),
+  );
+}
+
+/**
+ * Loads an explicit window rather than one derived from the current time. The
+ * client refetches using the window it already has, so a live update swaps the
+ * programs underneath the grid without the whole time axis shifting.
+ */
+export function loadGuideWindow(from: Date, to: Date): Guide {
   const channelRows = db
     .select()
     .from(channels)
