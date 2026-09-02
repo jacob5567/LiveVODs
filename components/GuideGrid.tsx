@@ -1,9 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Guide, GuideProgram } from '@/lib/guide';
+import type { Guide, GuideChannel, GuideProgram } from '@/lib/guide';
 import { MINUTE_MS, PX_PER_MINUTE } from '@/lib/time';
 import { ProgramCell } from './ProgramCell';
+import { PlayerPane, type Selection } from './PlayerPane';
 import styles from './GuideGrid.module.css';
 
 const CHANNEL_COL_W = 210;
@@ -25,9 +26,16 @@ function formatHour(ms: number): string {
     : d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
-export function GuideGrid({ guide }: { guide: Guide }) {
+export function GuideGrid({
+  guide,
+  extraParents = [],
+}: {
+  guide: Guide;
+  extraParents?: string[];
+}) {
   const scroller = useRef<HTMLDivElement>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [selection, setSelection] = useState<Selection | null>(null);
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), CLOCK_INTERVAL_MS);
@@ -89,8 +97,8 @@ export function GuideGrid({ guide }: { guide: Guide }) {
   const nudge = (hours: number) =>
     scroller.current?.scrollBy({ left: hours * 60 * PX_PER_MINUTE, behavior: 'smooth' });
 
-  const handleSelect = useCallback((program: GuideProgram) => {
-    window.open(program.canonicalUrl, '_blank', 'noopener,noreferrer');
+  const handleSelect = useCallback((program: GuideProgram, channel: GuideChannel) => {
+    setSelection({ program, channel });
   }, []);
 
   const liveCount = guide.channels.reduce(
@@ -120,6 +128,14 @@ export function GuideGrid({ guide }: { guide: Guide }) {
   return (
     <div className={styles.wrap}>
       <Toolbar liveCount={liveCount} onNow={scrollToNow} onNudge={nudge} />
+
+      {selection && (
+        <PlayerPane
+          selection={selection}
+          extraParents={extraParents}
+          onClose={() => setSelection(null)}
+        />
+      )}
 
       <div className={styles.scroller} ref={attachScroller}>
         <div className={styles.ruler}>
@@ -160,7 +176,8 @@ export function GuideGrid({ guide }: { guide: Guide }) {
                     program={program}
                     viewportStart={guide.from}
                     viewportEnd={guide.to}
-                    onSelect={handleSelect}
+                    selected={selection?.program.id === program.id}
+                    onSelect={(p) => handleSelect(p, channel)}
                   />
                 ))}
               </div>

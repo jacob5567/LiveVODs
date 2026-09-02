@@ -17,11 +17,13 @@ export function ProgramCell({
   program,
   viewportStart,
   viewportEnd,
+  selected = false,
   onSelect,
 }: {
   program: GuideProgram;
   viewportStart: number;
   viewportEnd: number;
+  selected?: boolean;
   onSelect: (program: GuideProgram) => void;
 }) {
   // A program that began before the window (or runs past it) is clipped to the
@@ -43,6 +45,7 @@ export function ProgramCell({
   // Square off a clipped edge so it reads as continuing past the window.
   if (startsBefore) classes.push(styles.clippedStart);
   if (endsAfter) classes.push(styles.clippedEnd);
+  if (selected) classes.push(styles.selected);
 
   const meta = isMissed
     ? 'did not air'

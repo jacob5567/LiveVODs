@@ -13,6 +13,8 @@ export const GUIDE_FUTURE_MS = 12 * HOUR_MS;
  */
 export interface GuideProgram {
   id: number;
+  /** Twitch stream id, or the YouTube video id the player embeds directly. */
+  platformRef: string;
   title: string;
   category: string | null;
   startsAt: number;
@@ -64,6 +66,7 @@ export function loadGuide(now: Date = new Date()): Guide {
     const list = byChannel.get(row.channelId);
     const program: GuideProgram = {
       id: row.id,
+      platformRef: row.platformRef,
       title: row.title,
       category: row.category,
       startsAt: row.startsAt.getTime(),

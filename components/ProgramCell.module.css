@@ -42,6 +42,11 @@
   text-overflow: ellipsis;
 }
 
+.selected {
+  outline: 2px solid var(--text);
+  outline-offset: -1px;
+}
+
 /* Clipped edges read as "this continues beyond the window". */
 .clippedStart {
   border-top-left-radius: 0;
