@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Guide, GuideSlot } from '@/lib/guide';
+import type { Guide, GuideSubject } from '@/lib/guide';
 import { MINUTE_MS, PX_PER_MINUTE } from '@/lib/time';
 import { ProgramCell } from './ProgramCell';
 import { PlayerPane, type Selection } from './PlayerPane';
@@ -56,7 +56,9 @@ export function GuideGrid({
     if (!selection) return null;
     for (const subject of guide.subjects) {
       const slot = subject.slots.find((s) => s.key === selection.slot.key);
-      if (slot) return { slot };
+      // startSeconds is deliberately carried over untouched: it records where
+      // the viewer tuned in, not where the programme is now.
+      if (slot) return { slot, startSeconds: selection.startSeconds };
     }
     return selection;
   }, [selection, guide]);
@@ -164,68 +166,70 @@ export function GuideGrid({
   const nudge = (hours: number) =>
     scroller.current?.scrollBy({ left: hours * 60 * PX_PER_MINUTE, behavior: 'smooth' });
 
-  const handleSelect = useCallback((slot: GuideSlot) => {
-    setSelection({ slot });
+  /**
+   * Tuning in to a row, the way changing channel on a television does: whatever
+   * that row is showing at this moment, resumed at the point it has reached
+   * rather than restarted from the beginning.
+   *
+   * The row is the target rather than each bar — you tune to a channel, not to
+   * a listing in the grid.
+   */
+  const tuneIn = useCallback((subject: GuideSubject) => {
+    const at = Date.now();
+
+    const showing =
+      subject.slots.find((slot) => slot.startsAt <= at && slot.endsAt > at) ??
+      // In a gap — the midnight seam, or a row with little library. Offer
+      // whatever is nearest rather than nothing at all.
+      [...subject.slots].sort(
+        (a, b) => Math.abs(a.startsAt - at) - Math.abs(b.startsAt - at),
+      )[0];
+
+    if (!showing) return;
+
+    // A live broadcast has no meaningful offset; you join it where it is.
+    const startSeconds =
+      showing.isAppointment || at < showing.startsAt
+        ? 0
+        : Math.floor((at - showing.startsAt) / 1000);
+
+    setSelection({ slot: showing, startSeconds });
   }, []);
 
   /**
-   * Arrow-key navigation across the grid.
-   *
-   * Reads positions from the DOM rather than tracking a ref matrix: bars are
-   * absolutely positioned and already know their own geometry, and up/down has
-   * to pick the program that lines up in *time* with the current one, which is
-   * exactly what offsetLeft encodes.
+   * Keyboard navigation. Rows are the interactive element, so up and down move
+   * between channels and Enter tunes in; left and right pan the timeline,
+   * which is the only other thing there is to do here.
    */
   const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
-    const keys = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
-    if (!keys.includes(event.key)) return;
-
     const current = document.activeElement;
-    if (!(current instanceof HTMLElement) || !current.dataset.program) return;
+    if (!(current instanceof HTMLElement) || !current.dataset.row) return;
 
-    const lane = current.closest<HTMLElement>('[data-lane]');
-    const rows = event.currentTarget;
-    if (!lane) return;
+    const rowEls = [...event.currentTarget.querySelectorAll<HTMLElement>('[data-row]')];
+    const index = rowEls.indexOf(current);
 
-    const cellsIn = (el: HTMLElement) =>
-      [...el.querySelectorAll<HTMLButtonElement>('button[data-program]:not([disabled])')];
-
-    const lanes = [...rows.querySelectorAll<HTMLElement>('[data-lane]')];
-    const laneIndex = lanes.indexOf(lane);
-    const siblings = cellsIn(lane);
-    const index = siblings.indexOf(current as HTMLButtonElement);
-
-    let next: HTMLElement | undefined;
-
-    if (event.key === 'ArrowLeft') next = siblings[index - 1];
-    else if (event.key === 'ArrowRight') next = siblings[index + 1];
-    else if (event.key === 'Home') next = siblings[0];
-    else if (event.key === 'End') next = siblings[siblings.length - 1];
-    else {
-      // Walk up or down past channels with nothing scheduled nearby, rather
-      // than dead-ending on an empty row.
-      const step = event.key === 'ArrowDown' ? 1 : -1;
-      const centre = current.offsetLeft + current.offsetWidth / 2;
-
-      for (let i = laneIndex + step; i >= 0 && i < lanes.length; i += step) {
-        const candidates = cellsIn(lanes[i]);
-        if (candidates.length === 0) continue;
-        next = candidates.reduce((best, cell) => {
-          const distance = Math.abs(cell.offsetLeft + cell.offsetWidth / 2 - centre);
-          const bestDistance = Math.abs(best.offsetLeft + best.offsetWidth / 2 - centre);
-          return distance < bestDistance ? cell : best;
-        });
-        break;
-      }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      const next = rowEls[index + (event.key === 'ArrowDown' ? 1 : -1)];
+      if (!next) return;
+      event.preventDefault();
+      next.focus();
+      next.scrollIntoView({ block: 'nearest' });
+      return;
     }
 
-    if (!next) return;
-    event.preventDefault();
-    next.focus();
-    next.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    if (event.key === 'Home' || event.key === 'End') {
+      const next = event.key === 'Home' ? rowEls[0] : rowEls[rowEls.length - 1];
+      event.preventDefault();
+      next?.focus();
+      return;
+    }
+
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault();
+      nudge(event.key === 'ArrowRight' ? 1 : -1);
+    }
   }, []);
 
-  // Only real broadcasts count as live; a repeat filling a gap does not.
   const liveCount = guide.subjects.reduce(
     (n, s) => n + s.slots.filter((slot) => slot.state === 'live' && slot.isAppointment).length,
     0,
@@ -287,7 +291,23 @@ export function GuideGrid({
           tabIndex={-1}
         >
           {guide.subjects.map((subject) => (
-            <div key={subject.id} className={styles.row} style={{ height: ROW_H }}>
+            <div
+              key={subject.id}
+              className={styles.row}
+              style={{ height: ROW_H }}
+              // The whole row is the target: you tune to a channel, not to a
+              // listing. Bars below are presentation only.
+              role="button"
+              tabIndex={0}
+              data-row={subject.id}
+              aria-label={`Tune in to ${subject.name}`}
+              onClick={() => tuneIn(subject)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                tuneIn(subject);
+              }}
+            >
               <div className={styles.channel} style={{ width: CHANNEL_COL_W }}>
                 <div className={styles.channelText}>
                   <div className={styles.channelName}>{subject.name}</div>
@@ -301,7 +321,7 @@ export function GuideGrid({
                 </div>
               </div>
 
-              <div className={styles.lane} style={{ width: totalWidth }} data-lane={subject.id}>
+              <div className={styles.lane} style={{ width: totalWidth }}>
                 {subject.slots.map((slot) => (
                   <ProgramCell
                     key={slot.key}
@@ -309,7 +329,6 @@ export function GuideGrid({
                     viewportStart={guide.from}
                     viewportEnd={guide.to}
                     selected={selection?.slot.key === slot.key}
-                    onSelect={handleSelect}
                   />
                 ))}
               </div>

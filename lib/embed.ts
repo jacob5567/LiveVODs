@@ -59,7 +59,28 @@ export function embedParents(hostname: string, extra: string[] = []): string[] {
   return [...new Set([hostname, ...extra].filter(Boolean))];
 }
 
-export function embedUrl(target: EmbedTarget, parents: string[]): string | null {
+/** Twitch wants an offset as 1h2m3s. */
+export function twitchTimeOffset(seconds: number): string {
+  const whole = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(whole / 3600);
+  const m = Math.floor((whole % 3600) / 60);
+  const s = whole % 60;
+  return `${h}h${m}m${s}s`;
+}
+
+/**
+ * `startSeconds` is how far into the programme the viewer is tuning in — the
+ * guide places library content on a timeline, so joining a row at 8:20 when the
+ * programme began at 8:00 has to start twenty minutes in, the way turning on a
+ * television does. A live broadcast ignores it: live is wherever it is.
+ */
+export function embedUrl(
+  target: EmbedTarget,
+  parents: string[],
+  startSeconds = 0,
+): string | null {
+  const offset = Math.max(0, Math.floor(startSeconds));
+
   switch (target.kind) {
     case 'twitch-channel': {
       const params = new URLSearchParams({ channel: target.channel, autoplay: 'true' });
@@ -67,12 +88,16 @@ export function embedUrl(target: EmbedTarget, parents: string[]): string | null 
       return `https://player.twitch.tv/?${params}`;
     }
     case 'twitch-video': {
-      const params = new URLSearchParams({ video: target.videoId, autoplay: 'false' });
+      const params = new URLSearchParams({ video: target.videoId, autoplay: 'true' });
+      if (offset > 0) params.set('time', twitchTimeOffset(offset));
       for (const parent of parents) params.append('parent', parent);
       return `https://player.twitch.tv/?${params}`;
     }
-    case 'youtube-video':
-      return `https://www.youtube.com/embed/${encodeURIComponent(target.videoId)}`;
+    case 'youtube-video': {
+      const params = new URLSearchParams({ autoplay: '1' });
+      if (offset > 0) params.set('start', String(offset));
+      return `https://www.youtube.com/embed/${encodeURIComponent(target.videoId)}?${params}`;
+    }
     case 'unavailable':
       return null;
   }

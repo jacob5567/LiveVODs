@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { Guide, GuideSlot } from '@/lib/guide';
 import { GuideGrid } from './GuideGrid';
 
@@ -12,6 +12,7 @@ import { GuideGrid } from './GuideGrid';
  * moves focus.
  */
 
+// Fixed so "what is on now" is deterministic.
 const NOW = Date.parse('2026-09-01T20:00:00.000Z');
 const MIN = 60_000;
 
@@ -51,7 +52,9 @@ function slot(programId: number, title: string, startsAt: number, endsAt: number
     endsAt,
     endsAtProvisional: false,
     state: 'aired',
-    isAppointment: true,
+    // Aired content is library fill, not an appointment — appointments are only
+    // ever live or scheduled.
+    isAppointment: false,
     isUpload: false,
     originalStartsAt: startsAt,
     canonicalUrl: 'https://twitch.tv/alice',
@@ -64,6 +67,7 @@ function slot(programId: number, title: string, startsAt: number, endsAt: number
 }
 
 beforeEach(() => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   // The grid subscribes to live updates on mount; neither exists in happy-dom.
   vi.stubGlobal(
     'EventSource',
@@ -84,11 +88,17 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
-const cell = (title: string) => screen.getByRole('button', { name: new RegExp(title) });
+const row = (name: string) => screen.getByRole('button', { name: new RegExp(`Tune in to ${name}`) });
+
+/** The open player. A title also appears in the grid, so assertions scope here. */
+const pane = () => within(screen.getByRole('button', { name: 'Close' }).closest('div')!.parentElement!);
 
 describe('GuideGrid', () => {
+  beforeEach(() => vi.setSystemTime(NOW));
+
   it('publishes the scroll offset that program labels slide with', async () => {
     const { container } = render(<GuideGrid guide={guide()} />);
 
@@ -123,7 +133,7 @@ describe('GuideGrid', () => {
     expect(setProperty.mock.calls.filter(([name]) => name === '--scroll-x')).toHaveLength(1);
   });
 
-  it('hands each bar its own geometry for that transform', () => {
+  it('hands each bar its own geometry for the label transform', () => {
     const { container } = render(<GuideGrid guide={guide()} />);
     const label = container.querySelector<HTMLElement>('[class*="label"]')!;
 
@@ -131,49 +141,83 @@ describe('GuideGrid', () => {
     expect(label.style.getPropertyValue('--bar-width')).toMatch(/^\d+(\.\d+)?px$/);
   });
 
-  it('moves focus along a channel with the arrow keys', () => {
-    render(<GuideGrid guide={guide()} />);
+  it('makes the row the control, not the individual listings', () => {
+    const { container } = render(<GuideGrid guide={guide()} />);
 
-    cell('Alpha').focus();
-    fireEvent.keyDown(screen.getByRole('grid'), { key: 'ArrowRight' });
-    expect(document.activeElement).toBe(cell('Beta'));
-
-    fireEvent.keyDown(screen.getByRole('grid'), { key: 'ArrowLeft' });
-    expect(document.activeElement).toBe(cell('Alpha'));
+    // Tuning is per channel, so a listing must not be focusable in its own right.
+    expect(container.querySelectorAll('button[data-program]')).toHaveLength(0);
+    expect(screen.getAllByRole('button', { name: /Tune in to/ })).toHaveLength(2);
   });
 
-  it('jumps to the ends of a channel with Home and End', () => {
+  it('tunes in to whatever the row is showing now', () => {
+    render(<GuideGrid guide={guide()} />);
+    fireEvent.click(row('Speedrunning'));
+
+    // Beta is the slot spanning NOW; Alpha and Gamma are not.
+    expect(pane().getByText('Beta')).toBeTruthy();
+  });
+
+  it('resumes at the point the programme has reached', () => {
+    render(<GuideGrid guide={guide()} />);
+    fireEvent.click(row('Speedrunning'));
+
+    // Beta started 30 minutes before NOW, so tuning in joins 30 minutes in
+    // rather than restarting it.
+    expect(pane().getByText(/Joined 30 min in/)).toBeTruthy();
+  });
+
+  it('joins a live broadcast where it is, with no offset', () => {
+    const g = guide();
+    g.subjects[0].slots[1] = { ...g.subjects[0].slots[1], state: 'live', isAppointment: true };
+
+    render(<GuideGrid guide={g} />);
+    fireEvent.click(row('Speedrunning'));
+
+    expect(screen.queryByText(/Joined/)).toBeNull();
+  });
+
+  it('falls back to the nearest programme when the row has a gap now', () => {
+    const g = guide();
+    // Nothing spans NOW on this row.
+    g.subjects[1].slots = [slot(30, 'Echo', NOW + 5 * 60 * MIN, NOW + 6 * 60 * MIN)];
+
+    render(<GuideGrid guide={g} />);
+    fireEvent.click(row('Coffee'));
+
+    expect(pane().getByText('Echo')).toBeTruthy();
+  });
+
+  it('moves between rows with the arrow keys', () => {
     render(<GuideGrid guide={guide()} />);
 
-    cell('Beta').focus();
-    fireEvent.keyDown(screen.getByRole('grid'), { key: 'End' });
-    expect(document.activeElement).toBe(cell('Gamma'));
+    row('Speedrunning').focus();
+    fireEvent.keyDown(screen.getByRole('grid'), { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(row('Coffee'));
 
-    fireEvent.keyDown(screen.getByRole('grid'), { key: 'Home' });
-    expect(document.activeElement).toBe(cell('Alpha'));
+    fireEvent.keyDown(screen.getByRole('grid'), { key: 'ArrowUp' });
+    expect(document.activeElement).toBe(row('Speedrunning'));
   });
 
   it('stays put at the edges rather than wrapping around', () => {
     render(<GuideGrid guide={guide()} />);
 
-    cell('Alpha').focus();
-    fireEvent.keyDown(screen.getByRole('grid'), { key: 'ArrowLeft' });
-    expect(document.activeElement).toBe(cell('Alpha'));
+    row('Speedrunning').focus();
+    fireEvent.keyDown(screen.getByRole('grid'), { key: 'ArrowUp' });
+    expect(document.activeElement).toBe(row('Speedrunning'));
   });
 
-  it('ignores keys it does not handle', () => {
+  it('tunes in from the keyboard', () => {
     render(<GuideGrid guide={guide()} />);
 
-    cell('Beta').focus();
-    fireEvent.keyDown(screen.getByRole('grid'), { key: 'a' });
-    expect(document.activeElement).toBe(cell('Beta'));
+    fireEvent.keyDown(row('Speedrunning'), { key: 'Enter' });
+    expect(screen.getByRole('link', { name: /Open on twitch/i })).toBeTruthy();
   });
 
-  it('opens the player on a program and closes it again', () => {
+  it('opens the player and closes it again', () => {
     render(<GuideGrid guide={guide()} />);
     expect(screen.queryByRole('link', { name: /Open on/i })).toBeNull();
 
-    fireEvent.click(cell('Beta'));
+    fireEvent.click(row('Speedrunning'));
     expect(screen.getByRole('link', { name: /Open on twitch/i })).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));

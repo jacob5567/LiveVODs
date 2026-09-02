@@ -104,6 +104,23 @@
 .row {
   display: flex;
   border-bottom: 1px solid var(--border);
+  /* The row is the control now, so the affordances live here rather than on
+     the individual listings. */
+  cursor: pointer;
+}
+
+.row:hover .lane,
+.row:focus-visible .lane {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.row:hover [class*='cell'] {
+  filter: brightness(1.18);
+}
+
+.row:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: -2px;
 }
 
 .channel {

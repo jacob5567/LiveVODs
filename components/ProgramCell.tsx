@@ -25,13 +25,11 @@ export function ProgramCell({
   viewportStart,
   viewportEnd,
   selected = false,
-  onSelect,
 }: {
   slot: GuideSlot;
   viewportStart: number;
   viewportEnd: number;
   selected?: boolean;
-  onSelect: (slot: GuideSlot) => void;
 }) {
   // A programme that began before the window (or runs past it) is clipped to the
   // window rather than positioned off-screen — otherwise its label sits at a
@@ -76,15 +74,18 @@ export function ProgramCell({
     .join('\n');
 
   return (
-    <button
-      type="button"
+    /**
+     * Presentation only. The row is the interactive element — you tune to a
+     * channel, not to one listing in the grid — so a bar is a listing, not a
+     * control, and must not take focus of its own.
+     */
+    <div
       className={classes.join(' ')}
       style={{ left, width: Math.max(width, 2) }}
       data-program={slot.programId}
       // Narrow bars have no visible label, so the tooltip carries the detail.
       title={tooltip}
-      disabled={isMissed}
-      onClick={() => onSelect(slot)}
+      aria-hidden="true"
     >
       {roomForLabel && (
         /**
@@ -111,6 +112,6 @@ export function ProgramCell({
           <span className={styles.meta}>{meta}</span>
         </span>
       )}
-    </button>
+    </div>
   );
 }

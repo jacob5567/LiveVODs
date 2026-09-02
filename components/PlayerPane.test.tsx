@@ -35,7 +35,7 @@ describe('PlayerPane', () => {
   it('embeds a live Twitch stream with the browsing host as parent', () => {
     render(
       <PlayerPane
-        selection={{ slot: slot() }}
+        selection={{ slot: slot(), startSeconds: 0 }}
         extraParents={[]}
         onClose={() => {}}
       />,
@@ -51,7 +51,7 @@ describe('PlayerPane', () => {
   it('includes configured extra parents alongside the detected one', () => {
     render(
       <PlayerPane
-        selection={{ slot: slot() }}
+        selection={{ slot: slot(), startSeconds: 0 }}
         extraParents={['guide.example.com']}
         onClose={() => {}}
       />,
@@ -68,19 +68,26 @@ describe('PlayerPane', () => {
       <PlayerPane
         selection={{
           slot: slot({ platformRef: 'yt-abc', state: 'live', platform: 'youtube', channelLogin: '@alice' }),
+          startSeconds: 0,
         }}
         extraParents={[]}
         onClose={() => {}}
       />,
     );
 
-    expect(iframe()!.getAttribute('src')).toBe('https://www.youtube.com/embed/yt-abc');
+    const url = new URL(iframe()!.getAttribute('src')!);
+    expect(url.origin + url.pathname).toBe('https://www.youtube.com/embed/yt-abc');
+    // Live: no offset to seek to.
+    expect(url.searchParams.get('start')).toBeNull();
   });
 
   it('explains itself instead of embedding when there is no recording', () => {
     render(
       <PlayerPane
-        selection={{ slot: slot({ state: 'aired', vodRef: null, endsAtProvisional: false }) }}
+        selection={{
+          slot: slot({ state: 'aired', vodRef: null, endsAtProvisional: false }),
+          startSeconds: 0,
+        }}
         extraParents={[]}
         onClose={() => {}}
       />,
@@ -93,7 +100,7 @@ describe('PlayerPane', () => {
   it('always offers a way out to the platform', () => {
     render(
       <PlayerPane
-        selection={{ slot: slot() }}
+        selection={{ slot: slot(), startSeconds: 0 }}
         extraParents={[]}
         onClose={() => {}}
       />,
@@ -108,7 +115,7 @@ describe('PlayerPane', () => {
     const onClose = vi.fn();
     render(
       <PlayerPane
-        selection={{ slot: slot() }}
+        selection={{ slot: slot(), startSeconds: 0 }}
         extraParents={[]}
         onClose={onClose}
       />,
@@ -121,7 +128,7 @@ describe('PlayerPane', () => {
   it('shows a live badge only while the broadcast is running', () => {
     const { rerender } = render(
       <PlayerPane
-        selection={{ slot: slot({ state: 'live' }) }}
+        selection={{ slot: slot({ state: 'live' }), startSeconds: 0 }}
         extraParents={[]}
         onClose={() => {}}
       />,
@@ -130,7 +137,10 @@ describe('PlayerPane', () => {
 
     rerender(
       <PlayerPane
-        selection={{ slot: slot({ state: 'aired', vodRef: 'v1', endsAtProvisional: false }) }}
+        selection={{
+          slot: slot({ state: 'aired', vodRef: 'v1', endsAtProvisional: false }),
+          startSeconds: 0,
+        }}
         extraParents={[]}
         onClose={() => {}}
       />,
@@ -145,7 +155,7 @@ describe('PlayerPane', () => {
     // a repeat.
     render(
       <PlayerPane
-        selection={{ slot: slot({ state: 'live', isAppointment: false }) }}
+        selection={{ slot: slot({ state: 'live', isAppointment: false }), startSeconds: 0 }}
         extraParents={[]}
         onClose={() => {}}
       />,
@@ -153,6 +163,50 @@ describe('PlayerPane', () => {
 
     expect(screen.queryByText('LIVE')).toBeNull();
     expect(screen.getByText('REPEAT')).toBeTruthy();
+  });
+
+  it('resumes a repeat where the row has reached, not from the start', () => {
+    // Tuning in twenty minutes into a programme should start twenty minutes in,
+    // the way turning on a television does.
+    render(
+      <PlayerPane
+        selection={{
+          slot: slot({
+            state: 'aired',
+            isAppointment: false,
+            vodRef: 'v9',
+            endsAtProvisional: false,
+          }),
+          startSeconds: 20 * 60,
+        }}
+        extraParents={[]}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(new URL(iframe()!.getAttribute('src')!).searchParams.get('time')).toBe('0h20m0s');
+    expect(screen.getByText(/Joined 20 min in/)).toBeTruthy();
+  });
+
+  it('seeks a YouTube repeat with a seconds offset', () => {
+    render(
+      <PlayerPane
+        selection={{
+          slot: slot({
+            platform: 'youtube',
+            platformRef: 'yt-abc',
+            state: 'aired',
+            isAppointment: false,
+            endsAtProvisional: false,
+          }),
+          startSeconds: 754,
+        }}
+        extraParents={[]}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(new URL(iframe()!.getAttribute('src')!).searchParams.get('start')).toBe('754');
   });
 
   it('says when a repeat was originally published', () => {
@@ -167,6 +221,7 @@ describe('PlayerPane', () => {
             endsAtProvisional: false,
             originalStartsAt: Date.parse('2026-08-20T10:00:00Z'),
           }),
+          startSeconds: 0,
         }}
         extraParents={[]}
         onClose={() => {}}

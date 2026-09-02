@@ -73,10 +73,6 @@
   border-color: color-mix(in srgb, var(--text-dim) 28%, transparent);
 }
 
-.rerun:hover {
-  opacity: 1;
-}
-
 .selected {
   outline: 2px solid var(--text);
   outline-offset: -1px;

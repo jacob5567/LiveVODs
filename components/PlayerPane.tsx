@@ -13,6 +13,12 @@ import styles from './PlayerPane.module.css';
 /** A slot carries its own channel now, since a row pools several. */
 export interface Selection {
   slot: GuideSlot;
+  /**
+   * How far into the programme the viewer tuned in, frozen at the moment they
+   * did. Recomputing it as the clock ticks would make the player re-seek and
+   * jump backwards under them.
+   */
+  startSeconds: number;
 }
 
 const formatTime = (ms: number) =>
@@ -36,7 +42,7 @@ export function PlayerPane({
   extraParents: string[];
   onClose: () => void;
 }) {
-  const { slot } = selection;
+  const { slot, startSeconds } = selection;
 
   // The embed needs the browser's own hostname, which only exists client-side.
   // Until it resolves the pane renders its chrome without an iframe.
@@ -68,8 +74,8 @@ export function PlayerPane({
 
   const src = useMemo(() => {
     if (!location) return null;
-    return embedUrl(target, embedParents(location.hostname, extraParents));
-  }, [target, location, extraParents]);
+    return embedUrl(target, embedParents(location.hostname, extraParents), startSeconds);
+  }, [target, location, extraParents, startSeconds]);
 
   const needsHttps =
     slot.platform === 'twitch' &&
@@ -135,6 +141,12 @@ export function PlayerPane({
             <>
               <br />
               {formatOriginal(slot)}
+            </>
+          )}
+          {startSeconds > 0 && (
+            <>
+              <br />
+              {`Joined ${Math.round(startSeconds / 60)} min in`}
             </>
           )}
         </div>

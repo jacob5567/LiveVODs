@@ -4,6 +4,7 @@ import {
   embedParents,
   embedTargetFor,
   embedUrl,
+  twitchTimeOffset,
   type EmbedInput,
 } from './embed';
 
@@ -91,20 +92,57 @@ describe('embedUrl', () => {
     expect(url.searchParams.getAll('parent')).toEqual(['localhost', 'example.com']);
   });
 
-  it('builds a Twitch VOD embed without autoplay', () => {
+  it('builds a Twitch VOD embed', () => {
     const url = new URL(embedUrl({ kind: 'twitch-video', videoId: 'v9' }, ['localhost'])!);
     expect(url.searchParams.get('video')).toBe('v9');
-    expect(url.searchParams.get('autoplay')).toBe('false');
+    expect(url.searchParams.getAll('parent')).toEqual(['localhost']);
   });
 
   it('builds a YouTube embed, which needs no parent', () => {
-    expect(embedUrl({ kind: 'youtube-video', videoId: 'yt-abc' }, [])).toBe(
-      'https://www.youtube.com/embed/yt-abc',
-    );
+    const url = new URL(embedUrl({ kind: 'youtube-video', videoId: 'yt-abc' }, [])!);
+    expect(url.origin + url.pathname).toBe('https://www.youtube.com/embed/yt-abc');
+    expect(url.searchParams.get('parent')).toBeNull();
   });
 
   it('returns nothing to embed when unavailable', () => {
     expect(embedUrl({ kind: 'unavailable', reason: 'nope' }, ['localhost'])).toBeNull();
+  });
+});
+
+describe('tuning in part-way through', () => {
+  it.each([
+    [0, '0h0m0s'],
+    [59, '0h0m59s'],
+    [20 * 60, '0h20m0s'],
+    [3661, '1h1m1s'],
+    [-5, '0h0m0s'],
+  ])('formats %s seconds for Twitch as %s', (seconds, expected) => {
+    expect(twitchTimeOffset(seconds)).toBe(expected);
+  });
+
+  it('resumes a Twitch VOD at the offset', () => {
+    const url = new URL(embedUrl({ kind: 'twitch-video', videoId: 'v9' }, ['localhost'], 1234)!);
+    expect(url.searchParams.get('time')).toBe('0h20m34s');
+  });
+
+  it('resumes a YouTube video at the offset, in whole seconds', () => {
+    const url = new URL(embedUrl({ kind: 'youtube-video', videoId: 'yt' }, [], 1234.7)!);
+    expect(url.searchParams.get('start')).toBe('1234');
+  });
+
+  it('omits the offset entirely when starting from the beginning', () => {
+    const twitch = new URL(embedUrl({ kind: 'twitch-video', videoId: 'v9' }, ['localhost'], 0)!);
+    const youtube = new URL(embedUrl({ kind: 'youtube-video', videoId: 'yt' }, [], 0)!);
+
+    expect(twitch.searchParams.get('time')).toBeNull();
+    expect(youtube.searchParams.get('start')).toBeNull();
+  });
+
+  it('ignores an offset on a live channel, which has no seekable position', () => {
+    const url = new URL(
+      embedUrl({ kind: 'twitch-channel', channel: 'alice' }, ['localhost'], 900)!,
+    );
+    expect(url.searchParams.get('time')).toBeNull();
   });
 });
 
