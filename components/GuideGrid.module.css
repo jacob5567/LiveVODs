@@ -1,0 +1,184 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex: none;
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  margin-right: auto;
+}
+
+.brand span {
+  color: var(--live);
+}
+
+.button {
+  background: var(--surface-raised);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.3rem 0.7rem;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.button:hover {
+  border-color: var(--text-dim);
+}
+
+/* The single scroll container. Both the ruler and the channel column stick
+   inside it, which is what keeps them aligned with the lanes at any offset. */
+.scroller {
+  flex: 1;
+  overflow: auto;
+  position: relative;
+}
+
+.ruler {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  height: 44px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.corner {
+  position: sticky;
+  left: 0;
+  z-index: 4;
+  flex: none;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+
+.ticks {
+  position: relative;
+  flex: none;
+  height: 100%;
+}
+
+.tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid var(--border);
+  padding-left: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.tickMinor {
+  border-left-color: color-mix(in srgb, var(--border) 45%, transparent);
+}
+
+.rows {
+  position: relative;
+}
+
+.row {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+}
+
+.channel {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0 0.75rem;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--surface-raised);
+  object-fit: cover;
+}
+
+.channelText {
+  min-width: 0;
+}
+
+.channelName {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.platform {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: lowercase;
+}
+
+.lane {
+  position: relative;
+  flex: none;
+}
+
+.nowLine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--live);
+  /* Above the program bars, but below the sticky channel column — otherwise the
+     line draws across the channel names once the grid is scrolled. */
+  z-index: 1;
+  pointer-events: none;
+}
+
+.nowLabel {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  background: var(--live);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 0 0 4px 4px;
+  white-space: nowrap;
+}
+
+.empty {
+  padding: 3rem 1.5rem;
+  color: var(--text-dim);
+  max-width: 640px;
+}
+
+.empty code {
+  background: var(--surface-raised);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  color: var(--text);
+}

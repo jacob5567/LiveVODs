@@ -1,0 +1,133 @@
+.cell {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  border-radius: 5px;
+  padding: 5px 9px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  border: 1px solid transparent;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+  transition: filter 0.12s ease;
+}
+
+.cell:hover {
+  filter: brightness(1.25);
+}
+
+.cell:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
+}
+
+.title {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.meta {
+  font-size: 11px;
+  color: color-mix(in srgb, var(--text) 65%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Clipped edges read as "this continues beyond the window". */
+.clippedStart {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left-style: dotted;
+}
+
+.clippedEnd {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right-style: dotted;
+}
+
+.live {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--live) 32%, var(--surface-raised)),
+    color-mix(in srgb, var(--live) 18%, var(--surface-raised))
+  );
+  border-color: var(--live);
+}
+
+/* A running broadcast has no known end, so the bar fades out instead of
+   asserting a hard edge the data cannot support. */
+.ongoing {
+  mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent 100%);
+}
+
+.scheduled {
+  background: color-mix(in srgb, var(--scheduled) 22%, var(--surface-raised));
+  border-color: color-mix(in srgb, var(--scheduled) 55%, transparent);
+}
+
+.aired {
+  background: var(--aired);
+  border-color: color-mix(in srgb, var(--text-dim) 30%, transparent);
+}
+
+.missed {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--missed),
+    var(--missed) 6px,
+    transparent 6px,
+    transparent 12px
+  );
+  border-color: var(--border);
+  border-style: dashed;
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.missed:hover {
+  filter: none;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #fff;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #fff;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot {
+    animation: none;
+  }
+}
