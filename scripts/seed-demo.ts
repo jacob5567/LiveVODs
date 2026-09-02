@@ -5,11 +5,19 @@
  * Safe to re-run: it clears the demo rows first.
  *
  *   npm run db:migrate && npx tsx scripts/seed-demo.ts
+ *
+ * Once real channels are synced these fixtures only clutter the guide, so:
+ *
+ *   npx tsx scripts/seed-demo.ts --clear
+ *
+ * removes them and adds nothing back.
  */
-import { eq } from 'drizzle-orm';
+import { eq, like } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { channels, programs, type ProgramState } from '@/drizzle/schema';
 import { HOUR_MS, MINUTE_MS } from '@/lib/time';
+
+const CLEAR_ONLY = process.argv.includes('--clear');
 
 const now = Date.now();
 const at = (offsetMinutes: number) => new Date(now + offsetMinutes * MINUTE_MS);
@@ -109,6 +117,17 @@ function canonicalUrl(c: DemoChannel): string {
 
 let channelCount = 0;
 let programCount = 0;
+
+if (CLEAR_ONLY) {
+  // Programs go with them via ON DELETE CASCADE.
+  const removed = db
+    .delete(channels)
+    .where(like(channels.platformChannelId, 'demo-%'))
+    .run();
+
+  console.log(`removed ${removed.changes} demo channel(s) and their programs`);
+  process.exit(0);
+}
 
 db.transaction((tx) => {
   for (const [i, c] of lineup.entries()) {

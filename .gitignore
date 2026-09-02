@@ -41,6 +41,10 @@ data/
 .env.*
 !.env.example
 
+# the lineup is personal configuration, like .env — the example is committed,
+# the real one is not
+config/channels.yml
+
 # logs
 logs/
 *.log

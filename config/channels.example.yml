@@ -1,0 +1,32 @@
+# The lineup — copy this to config/channels.yml and edit it.
+#
+#   cp config/channels.example.yml config/channels.yml
+#   npm run channels:sync -- --dry-run    # resolve against the APIs, write nothing
+#   npm run channels:sync                 # apply
+#
+# channels.yml is gitignored, so your own lineup stays out of the repository.
+#
+# Twitch entries are login names, exactly as in twitch.tv/<login>.
+# YouTube entries are handles including the leading @, as in youtube.com/@<handle>.
+#
+# The sync resolves each to a stable platform id and stores that, so a channel
+# that later renames itself keeps its history. Removing a channel here does not
+# delete it — sync never disables anything, so an entry you drop stops being
+# updated but keeps the programs already ingested.
+
+twitch:
+  - theprimeagen
+  - tsoding
+  - piratesoftware
+  - cohhcarnage
+  - northernlion
+
+# A caveat worth knowing before you fill this in: LiveVODs is a guide to live
+# programming, so a YouTube channel earns a row only through streams and
+# premieres. Channels that publish ordinary uploads and never go live have no
+# broadcasts to show, and will sit as permanently empty rows — the connector
+# skips any video without liveStreamingDetails on purpose. Pick channels that
+# actually stream.
+youtube:
+  - "@LinusTechTips"
+  - "@ThePrimeTimeagen"

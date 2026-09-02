@@ -15,6 +15,21 @@ loadEnv();
 
 const DRY_RUN = process.argv.includes('--dry-run');
 const CONFIG_PATH = 'config/channels.yml';
+const EXAMPLE_PATH = 'config/channels.example.yml';
+
+/** channels.yml is gitignored, so a fresh clone will not have one yet. */
+function readConfig(): string {
+  try {
+    return readFileSync(CONFIG_PATH, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    console.error(
+      `No ${CONFIG_PATH}. It holds your own lineup and is gitignored, so start from the example:\n\n` +
+        `  cp ${EXAMPLE_PATH} ${CONFIG_PATH}\n`,
+    );
+    process.exit(1);
+  }
+}
 
 interface ChannelsConfig {
   twitch?: string[];
@@ -33,7 +48,7 @@ async function main(): Promise<void> {
 
   migrate(db, { migrationsFolder: './drizzle/migrations' });
 
-  const config = parse(readFileSync(CONFIG_PATH, 'utf8')) as ChannelsConfig | null;
+  const config = parse(readConfig()) as ChannelsConfig | null;
 
   // A memory ledger: a sync is a one-off and should not eat into the worker's
   // persisted daily budget.
