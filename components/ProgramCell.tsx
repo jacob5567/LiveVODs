@@ -7,6 +7,9 @@ import styles from './ProgramCell.module.css';
 /** Below this a bar has no room for a title, so it shows nothing but its colour. */
 const MIN_LABEL_PX = 54;
 
+/** Horizontal padding inside a bar, kept in sync with .cell in the stylesheet. */
+const CELL_PADDING_PX = 18;
+
 function formatTime(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
@@ -56,6 +59,7 @@ export function ProgramCell({
       type="button"
       className={classes.join(' ')}
       style={{ left, width: Math.max(width, 2) }}
+      data-program={program.id}
       // Narrow bars have no visible label, so the tooltip carries the detail.
       title={`${program.title}${program.category ? ` — ${program.category}` : ''}\n${formatTime(
         program.startsAt,
@@ -64,7 +68,20 @@ export function ProgramCell({
       onClick={() => onSelect(program)}
     >
       {roomForLabel && (
-        <>
+        /**
+         * The bar's own geometry, handed to CSS so the label can slide right as
+         * the bar scrolls off to the left and stay readable. See .label.
+         */
+        <span
+          className={styles.label}
+          style={
+            {
+              maxWidth: Math.max(0, width - CELL_PADDING_PX),
+              '--bar-left': `${left}px`,
+              '--bar-width': `${width}px`,
+            } as React.CSSProperties
+          }
+        >
           {isLive && (
             <span className={styles.badge}>
               <span className={styles.dot} />
@@ -73,7 +90,7 @@ export function ProgramCell({
           )}
           <span className={styles.title}>{program.title}</span>
           <span className={styles.meta}>{meta}</span>
-        </>
+        </span>
       )}
     </button>
   );

@@ -8,13 +8,36 @@
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 1px;
   border: 1px solid transparent;
   text-align: left;
   font: inherit;
   color: var(--text);
   cursor: pointer;
   transition: filter 0.12s ease;
+}
+
+/**
+ * Keeps the title readable while a long broadcast scrolls off to the left,
+ * instead of leaving an anonymous coloured bar.
+ *
+ * Driven by --scroll-x, which the grid updates on scroll, rather than by
+ * position:sticky — the bar needs overflow:hidden for its ellipsis, and that
+ * makes it a scroll container, which is exactly what a sticky child would then
+ * stick to. The clamp stops the label sliding past the bar's own right edge.
+ */
+.label {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  min-width: 0;
+  transform: translateX(
+    clamp(
+      0px,
+      calc(var(--scroll-x, 0px) - var(--bar-left, 0px)),
+      max(0px, calc(var(--bar-width, 0px) - var(--label-keep, 90px)))
+    )
+  );
 }
 
 .cell:hover {

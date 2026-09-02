@@ -1,0 +1,184 @@
+// @vitest-environment happy-dom
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import type { Guide } from '@/lib/guide';
+import { GuideGrid } from './GuideGrid';
+
+/**
+ * happy-dom performs no layout, so anything geometric (bar widths, the
+ * up/down navigation that matches programs by horizontal position) is left to
+ * the browser. What is worth pinning down here is the wiring: that scrolling
+ * publishes the offset the label transform reads, and that ordered navigation
+ * moves focus.
+ */
+
+const NOW = Date.parse('2026-09-01T20:00:00.000Z');
+const MIN = 60_000;
+
+function guide(): Guide {
+  return {
+    from: NOW - 4 * 60 * MIN,
+    to: NOW + 12 * 60 * MIN,
+    channels: [
+      {
+        id: 1,
+        platform: 'twitch',
+        login: 'alice',
+        displayName: 'Alice',
+        avatarUrl: null,
+        programs: [
+          program(10, 'Alpha', NOW - 120 * MIN, NOW - 60 * MIN),
+          program(11, 'Beta', NOW - 30 * MIN, NOW + 30 * MIN),
+          program(12, 'Gamma', NOW + 60 * MIN, NOW + 120 * MIN),
+        ],
+      },
+      {
+        id: 2,
+        platform: 'youtube',
+        login: '@bob',
+        displayName: 'Bob',
+        avatarUrl: null,
+        programs: [program(20, 'Delta', NOW - 30 * MIN, NOW + 30 * MIN)],
+      },
+    ],
+  };
+}
+
+function program(id: number, title: string, startsAt: number, endsAt: number) {
+  return {
+    id,
+    platformRef: `ref-${id}`,
+    title,
+    category: null,
+    startsAt,
+    endsAt,
+    endsAtProvisional: false,
+    state: 'aired' as const,
+    canonicalUrl: 'https://twitch.tv/alice',
+    vodRef: null,
+  };
+}
+
+beforeEach(() => {
+  // The grid subscribes to live updates on mount; neither exists in happy-dom.
+  vi.stubGlobal(
+    'EventSource',
+    class {
+      addEventListener() {}
+      close() {}
+    },
+  );
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+const cell = (title: string) => screen.getByRole('button', { name: new RegExp(title) });
+
+describe('GuideGrid', () => {
+  it('publishes the scroll offset that program labels slide with', async () => {
+    const { container } = render(<GuideGrid guide={guide()} />);
+
+    const scroller = container.querySelector<HTMLElement>('[class*="scroller"]')!;
+    const rows = container.querySelector<HTMLElement>('[role="grid"]')!;
+
+    Object.defineProperty(scroller, 'scrollLeft', { value: 640, configurable: true });
+    fireEvent.scroll(scroller);
+
+    // Published as a custom property rather than React state: this fires every
+    // scroll frame and must not re-render every bar. The write is deferred to
+    // the next animation frame, so waiting for it is part of the contract.
+    await vi.waitFor(() => expect(rows.style.getPropertyValue('--scroll-x')).toBe('640px'));
+  });
+
+  it('coalesces a burst of scroll events into one write', async () => {
+    const { container } = render(<GuideGrid guide={guide()} />);
+    const scroller = container.querySelector<HTMLElement>('[class*="scroller"]')!;
+    const rows = container.querySelector<HTMLElement>('[role="grid"]')!;
+
+    const setProperty = vi.spyOn(rows.style, 'setProperty');
+
+    for (const left of [100, 200, 300, 640]) {
+      Object.defineProperty(scroller, 'scrollLeft', { value: left, configurable: true });
+      fireEvent.scroll(scroller);
+    }
+
+    await vi.waitFor(() => expect(rows.style.getPropertyValue('--scroll-x')).toBe('640px'));
+
+    // Four scroll events, one style write — and it carries the position read at
+    // the frame boundary rather than the stale one from the first event.
+    expect(setProperty.mock.calls.filter(([name]) => name === '--scroll-x')).toHaveLength(1);
+  });
+
+  it('hands each bar its own geometry for that transform', () => {
+    const { container } = render(<GuideGrid guide={guide()} />);
+    const label = container.querySelector<HTMLElement>('[class*="label"]')!;
+
+    expect(label.style.getPropertyValue('--bar-left')).toMatch(/^\d+(\.\d+)?px$/);
+    expect(label.style.getPropertyValue('--bar-width')).toMatch(/^\d+(\.\d+)?px$/);
+  });
+
+  it('moves focus along a channel with the arrow keys', () => {
+    render(<GuideGrid guide={guide()} />);
+
+    cell('Alpha').focus();
+    fireEvent.keyDown(screen.getByRole('grid'), { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(cell('Beta'));
+
+    fireEvent.keyDown(screen.getByRole('grid'), { key: 'ArrowLeft' });
+    expect(document.activeElement).toBe(cell('Alpha'));
+  });
+
+  it('jumps to the ends of a channel with Home and End', () => {
+    render(<GuideGrid guide={guide()} />);
+
+    cell('Beta').focus();
+    fireEvent.keyDown(screen.getByRole('grid'), { key: 'End' });
+    expect(document.activeElement).toBe(cell('Gamma'));
+
+    fireEvent.keyDown(screen.getByRole('grid'), { key: 'Home' });
+    expect(document.activeElement).toBe(cell('Alpha'));
+  });
+
+  it('stays put at the edges rather than wrapping around', () => {
+    render(<GuideGrid guide={guide()} />);
+
+    cell('Alpha').focus();
+    fireEvent.keyDown(screen.getByRole('grid'), { key: 'ArrowLeft' });
+    expect(document.activeElement).toBe(cell('Alpha'));
+  });
+
+  it('ignores keys it does not handle', () => {
+    render(<GuideGrid guide={guide()} />);
+
+    cell('Beta').focus();
+    fireEvent.keyDown(screen.getByRole('grid'), { key: 'a' });
+    expect(document.activeElement).toBe(cell('Beta'));
+  });
+
+  it('opens the player on a program and closes it again', () => {
+    render(<GuideGrid guide={guide()} />);
+    expect(screen.queryByRole('link', { name: /Open on/i })).toBeNull();
+
+    fireEvent.click(cell('Beta'));
+    expect(screen.getByRole('link', { name: /Open on twitch/i })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('link', { name: /Open on/i })).toBeNull();
+  });
+
+  it('explains how to populate an empty lineup', () => {
+    render(<GuideGrid guide={{ from: NOW, to: NOW + 1000, channels: [] }} />);
+    expect(screen.getByText(/No channels in the lineup yet/i)).toBeTruthy();
+    expect(screen.getByText('config/channels.yml')).toBeTruthy();
+  });
+});

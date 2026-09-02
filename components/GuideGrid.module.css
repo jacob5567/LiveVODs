@@ -45,6 +45,9 @@
   flex: 1;
   overflow: auto;
   position: relative;
+  /* min-height:0 lets this flex child actually shrink; without it the pane
+     above pushes the grid past the viewport instead of the grid scrolling. */
+  min-height: 0;
 }
 
 .ruler {
@@ -92,6 +95,10 @@
 
 .rows {
   position: relative;
+  /* Fills the scrollport when there are fewer channels than fit, so the
+     now-line runs the full height instead of stopping at the last row and
+     leaving the space below looking like a rendering fault. */
+  min-height: 100%;
 }
 
 .row {

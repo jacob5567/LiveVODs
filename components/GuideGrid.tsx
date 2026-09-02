@@ -18,6 +18,12 @@ const LEAD_IN_PX = 60 * PX_PER_MINUTE;
 /** Keep the now-line honest without re-rendering constantly. */
 const CLOCK_INTERVAL_MS = 30_000;
 
+/**
+ * Exposed to CSS so a program bar's sticky label knows to stop clear of the
+ * channel column rather than sliding underneath it.
+ */
+const CSS_VARS = { '--channel-col': `${CHANNEL_COL_W}px` } as React.CSSProperties;
+
 const xFor = (ms: number, from: number) => ((ms - from) / MINUTE_MS) * PX_PER_MINUTE;
 
 function formatHour(ms: number): string {
@@ -36,6 +42,8 @@ export function GuideGrid({
 }) {
   const guide = useLiveGuide(initialGuide);
   const scroller = useRef<HTMLDivElement>(null);
+  const rows = useRef<HTMLDivElement>(null);
+  const scrollFrame = useRef(0);
   const [now, setNow] = useState(() => Date.now());
   const [selection, setSelection] = useState<Selection | null>(null);
 
@@ -99,20 +107,120 @@ export function GuideGrid({
     [offsetForNow],
   );
 
+  /**
+   * The callback ref above lands the scroll during commit, but an element is
+   * only scrollable once its content has actually been laid out wider than the
+   * viewport — before that, assigning scrollLeft clamps silently to 0. Watching
+   * the content settle makes this deterministic instead of a race against the
+   * first frame, which the guide lost often enough to open on the wrong hours.
+   *
+   * Applies once, so it never yanks the view back after the viewer scrolls.
+   */
   useEffect(() => {
     const node = scroller.current;
-    if (!node) return;
-    const frame = requestAnimationFrame(() => {
+    const content = rows.current;
+    if (!node || !content) return;
+
+    let applied = false;
+    const apply = () => {
+      if (applied || node.scrollWidth <= node.clientWidth) return;
       node.scrollLeft = offsetForNow();
-    });
-    return () => cancelAnimationFrame(frame);
+      // Seed the label offset: setting scrollLeft programmatically does fire a
+      // scroll event, but publishing here means the first paint is already right.
+      content.style.setProperty('--scroll-x', `${node.scrollLeft}px`);
+      applied = true;
+      observer.disconnect();
+    };
+
+    const observer = new ResizeObserver(apply);
+    observer.observe(content);
+    apply();
+
+    return () => observer.disconnect();
   }, [offsetForNow]);
+
+  /**
+   * Publishes the horizontal offset to CSS so program labels can slide with it.
+   *
+   * A custom property on one element rather than React state: this fires on
+   * every scroll frame, and re-rendering every bar that often would be wasteful
+   * when nothing about them actually changes.
+   */
+  const publishScroll = useCallback(() => {
+    const node = scroller.current;
+    const content = rows.current;
+    if (!node || !content || scrollFrame.current) return;
+
+    scrollFrame.current = requestAnimationFrame(() => {
+      scrollFrame.current = 0;
+      content.style.setProperty('--scroll-x', `${node.scrollLeft}px`);
+    });
+  }, []);
+
+  useEffect(() => () => cancelAnimationFrame(scrollFrame.current), []);
 
   const nudge = (hours: number) =>
     scroller.current?.scrollBy({ left: hours * 60 * PX_PER_MINUTE, behavior: 'smooth' });
 
   const handleSelect = useCallback((program: GuideProgram, channel: GuideChannel) => {
     setSelection({ program, channel });
+  }, []);
+
+  /**
+   * Arrow-key navigation across the grid.
+   *
+   * Reads positions from the DOM rather than tracking a ref matrix: bars are
+   * absolutely positioned and already know their own geometry, and up/down has
+   * to pick the program that lines up in *time* with the current one, which is
+   * exactly what offsetLeft encodes.
+   */
+  const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    const keys = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
+    if (!keys.includes(event.key)) return;
+
+    const current = document.activeElement;
+    if (!(current instanceof HTMLElement) || !current.dataset.program) return;
+
+    const lane = current.closest<HTMLElement>('[data-lane]');
+    const rows = event.currentTarget;
+    if (!lane) return;
+
+    const cellsIn = (el: HTMLElement) =>
+      [...el.querySelectorAll<HTMLButtonElement>('button[data-program]:not([disabled])')];
+
+    const lanes = [...rows.querySelectorAll<HTMLElement>('[data-lane]')];
+    const laneIndex = lanes.indexOf(lane);
+    const siblings = cellsIn(lane);
+    const index = siblings.indexOf(current as HTMLButtonElement);
+
+    let next: HTMLElement | undefined;
+
+    if (event.key === 'ArrowLeft') next = siblings[index - 1];
+    else if (event.key === 'ArrowRight') next = siblings[index + 1];
+    else if (event.key === 'Home') next = siblings[0];
+    else if (event.key === 'End') next = siblings[siblings.length - 1];
+    else {
+      // Walk up or down past channels with nothing scheduled nearby, rather
+      // than dead-ending on an empty row.
+      const step = event.key === 'ArrowDown' ? 1 : -1;
+      const centre = current.offsetLeft + current.offsetWidth / 2;
+
+      for (let i = laneIndex + step; i >= 0 && i < lanes.length; i += step) {
+        const candidates = cellsIn(lanes[i]);
+        if (candidates.length === 0) continue;
+        next = candidates.reduce((best, cell) => {
+          const distance = Math.abs(cell.offsetLeft + cell.offsetWidth / 2 - centre);
+          const bestDistance = Math.abs(best.offsetLeft + best.offsetWidth / 2 - centre);
+          return distance < bestDistance ? cell : best;
+        });
+        break;
+      }
+    }
+
+    if (!next) return;
+    event.preventDefault();
+    next.focus();
+    next.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, []);
 
   const liveCount = guide.channels.reduce(
@@ -122,7 +230,7 @@ export function GuideGrid({
 
   if (guide.channels.length === 0) {
     return (
-      <div className={styles.wrap}>
+      <div className={styles.wrap} style={CSS_VARS}>
         <Toolbar liveCount={0} onNow={scrollToNow} onNudge={nudge} />
         <div className={styles.empty}>
           <p>No channels in the lineup yet.</p>
@@ -140,7 +248,7 @@ export function GuideGrid({
   const nowVisible = now >= guide.from && now <= guide.to;
 
   return (
-    <div className={styles.wrap}>
+    <div className={styles.wrap} style={CSS_VARS}>
       <Toolbar liveCount={liveCount} onNow={scrollToNow} onNudge={nudge} />
 
       {currentSelection && (
@@ -151,7 +259,7 @@ export function GuideGrid({
         />
       )}
 
-      <div className={styles.scroller} ref={attachScroller}>
+      <div className={styles.scroller} ref={attachScroller} onScroll={publishScroll}>
         <div className={styles.ruler}>
           <div className={styles.corner} style={{ width: CHANNEL_COL_W }} />
           <div className={styles.ticks} style={{ width: totalWidth }}>
@@ -167,7 +275,14 @@ export function GuideGrid({
           </div>
         </div>
 
-        <div className={styles.rows}>
+        {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
+        <div
+          className={styles.rows}
+          ref={rows}
+          onKeyDown={handleKeyDown}
+          role="grid"
+          tabIndex={-1}
+        >
           {guide.channels.map((channel) => (
             <div key={channel.id} className={styles.row} style={{ height: ROW_H }}>
               <div className={styles.channel} style={{ width: CHANNEL_COL_W }}>
@@ -183,7 +298,7 @@ export function GuideGrid({
                 </div>
               </div>
 
-              <div className={styles.lane} style={{ width: totalWidth }}>
+              <div className={styles.lane} style={{ width: totalWidth }} data-lane={channel.id}>
                 {channel.programs.map((program) => (
                   <ProgramCell
                     key={program.id}
