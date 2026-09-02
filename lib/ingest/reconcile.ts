@@ -39,6 +39,8 @@ export interface ProgramRecord {
   canonicalUrl: string;
   thumbnailUrl: string | null;
   vodRef: string | null;
+  /** An ordinary YouTube upload rather than a broadcast. Library content. */
+  isUpload: boolean;
 }
 
 export type NewProgram = Omit<ProgramRecord, 'id'>;
@@ -98,6 +100,12 @@ export interface VodObservation {
   endsAt: Date;
   canonicalUrl: string;
   thumbnailUrl: string | null;
+  /**
+   * Set for a plain YouTube upload. It was never broadcast, so its "air time"
+   * is only when it was published — the guide schedules it as library content
+   * rather than treating it as something that actually aired then.
+   */
+  isUpload?: boolean;
 }
 
 export type Observation =
@@ -222,6 +230,7 @@ export function reconcile(
         canonicalUrl: obs.canonicalUrl,
         thumbnailUrl: obs.thumbnailUrl,
         vodRef: null,
+        isUpload: false,
       },
     });
   }
@@ -292,6 +301,7 @@ export function reconcile(
         canonicalUrl: obs.canonicalUrl,
         thumbnailUrl: obs.thumbnailUrl,
         vodRef: null,
+        isUpload: false,
       },
     });
   }
@@ -346,6 +356,7 @@ export function reconcile(
         canonicalUrl: obs.canonicalUrl,
         thumbnailUrl: obs.thumbnailUrl,
         vodRef: obs.vodRef,
+        isUpload: obs.isUpload ?? false,
       },
     });
   }
@@ -405,6 +416,7 @@ function diff(original: ProgramRecord, current: NewProgram): ProgramPatch | null
   set('canonicalUrl');
   set('thumbnailUrl');
   set('vodRef');
+  set('isUpload');
 
   return changed ? patch : null;
 }

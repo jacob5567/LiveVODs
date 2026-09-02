@@ -1,43 +1,69 @@
-import { and, asc, gt, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, lt, sql } from 'drizzle-orm';
 import { db } from '@/lib/db';
-import { channels, programs, type Platform, type ProgramState } from '@/drizzle/schema';
+import {
+  channels,
+  programs,
+  subjectChannels,
+  subjects,
+  type Platform,
+  type ProgramState,
+} from '@/drizzle/schema';
 import { HOUR_MS } from '@/lib/time';
+import { dayBounds, programmeWindow, type Appointment, type LibraryItem } from '@/lib/schedule';
 
 /** How far back and forward the guide loads around "now". */
 export const GUIDE_PAST_MS = 4 * HOUR_MS;
 export const GUIDE_FUTURE_MS = 12 * HOUR_MS;
 
 /**
+ * Most recent library items considered per subject. Enough to programme a day
+ * without variety suffering, and it stops a subject with years of back
+ * catalogue loading all of it on every request.
+ */
+const LIBRARY_LIMIT = 400;
+
+/**
  * Times cross the server/client boundary as epoch milliseconds rather than Date
  * objects — unambiguous to serialize, and the grid does arithmetic on them anyway.
  */
-export interface GuideProgram {
-  id: number;
-  /** Twitch stream id, or the YouTube video id the player embeds directly. */
-  platformRef: string;
+export interface GuideSlot {
+  /** Unique per placement: the same programme may be rerun more than once. */
+  key: string;
+  programId: number;
   title: string;
   category: string | null;
+  /** Where this sits on the grid. For library content, when it is *scheduled*. */
   startsAt: number;
   endsAt: number;
-  endsAtProvisional: boolean;
   state: ProgramState;
+  endsAtProvisional: boolean;
+  /** True for a real broadcast at its real time; false for library fill. */
+  isAppointment: boolean;
+  isUpload: boolean;
+  /** When it actually aired or was published, which a rerun no longer shows. */
+  originalStartsAt: number;
   canonicalUrl: string;
+  platformRef: string;
   vodRef: string | null;
+  channelId: number;
+  channelName: string;
+  /** Twitch login / YouTube handle — what the embed needs. */
+  channelLogin: string;
+  platform: Platform;
 }
 
-export interface GuideChannel {
+export interface GuideSubject {
   id: number;
-  platform: Platform;
-  login: string;
-  displayName: string;
-  avatarUrl: string | null;
-  programs: GuideProgram[];
+  name: string;
+  /** Channels feeding this row, for the row header. */
+  channelNames: string[];
+  slots: GuideSlot[];
 }
 
 export interface Guide {
   from: number;
   to: number;
-  channels: GuideChannel[];
+  subjects: GuideSubject[];
 }
 
 /**
@@ -70,55 +96,120 @@ export function loadGuide(now: Date = new Date()): Guide {
 /**
  * Loads an explicit window rather than one derived from the current time. The
  * client refetches using the window it already has, so a live update swaps the
- * programs underneath the grid without the whole time axis shifting.
+ * programmes underneath the grid without the whole time axis shifting.
  */
 export function loadGuideWindow(from: Date, to: Date): Guide {
-  const channelRows = db
+  const fromMs = from.getTime();
+  const toMs = to.getTime();
+
+  const subjectRows = db
     .select()
-    .from(channels)
-    // Stable ordering, like real channel numbers. Sorting live-first would make
-    // rows jump around underneath the viewer every time a stream starts or ends.
-    .orderBy(asc(channels.displayName))
+    .from(subjects)
+    .orderBy(asc(subjects.position), asc(subjects.name))
     .all();
 
-  const programRows = db
-    .select()
-    .from(programs)
-    // Anything overlapping the window, not just what starts inside it — a stream
-    // that began before `from` and is still running must still appear.
-    .where(and(lt(programs.startsAt, to), gt(programs.endsAt, from)))
-    .orderBy(asc(programs.startsAt))
+  const memberships = db
+    .select({
+      subjectId: subjectChannels.subjectId,
+      channelId: channels.id,
+      displayName: channels.displayName,
+      login: channels.login,
+      platform: channels.platform,
+    })
+    .from(subjectChannels)
+    .innerJoin(channels, eq(channels.id, subjectChannels.channelId))
     .all();
 
-  const byChannel = new Map<number, GuideProgram[]>();
-  for (const row of programRows) {
-    const list = byChannel.get(row.channelId);
-    const program: GuideProgram = {
-      id: row.id,
-      platformRef: row.platformRef,
-      title: row.title,
-      category: row.category,
-      startsAt: row.startsAt.getTime(),
-      endsAt: row.endsAt.getTime(),
-      endsAtProvisional: row.endsAtProvisional,
-      state: row.state,
-      canonicalUrl: row.canonicalUrl,
-      vodRef: row.vodRef,
-    };
-    if (list) list.push(program);
-    else byChannel.set(row.channelId, [program]);
+  const byChannel = new Map(memberships.map((m) => [m.channelId, m]));
+  const channelsFor = new Map<number, number[]>();
+  for (const m of memberships) {
+    const list = channelsFor.get(m.subjectId);
+    if (list) list.push(m.channelId);
+    else channelsFor.set(m.subjectId, [m.channelId]);
   }
 
-  return {
-    from: from.getTime(),
-    to: to.getTime(),
-    channels: channelRows.map((c) => ({
-      id: c.id,
-      platform: c.platform,
-      login: c.login,
-      displayName: c.displayName,
-      avatarUrl: c.avatarUrl,
-      programs: byChannel.get(c.id) ?? [],
-    })),
-  };
+  // Days are programmed whole, so appointments are needed for every day the
+  // window touches, not merely the window itself.
+  const spanStart = dayBounds(fromMs).start;
+  const spanEnd = dayBounds(toMs).end;
+
+  const out: GuideSubject[] = [];
+
+  for (const subject of subjectRows) {
+    const channelIds = channelsFor.get(subject.id) ?? [];
+    const channelNames = channelIds.map((id) => byChannel.get(id)?.displayName ?? '');
+
+    if (channelIds.length === 0) {
+      out.push({ id: subject.id, name: subject.name, channelNames, slots: [] });
+      continue;
+    }
+
+    const appointmentRows = db
+      .select()
+      .from(programs)
+      .where(
+        and(
+          inArray(programs.channelId, channelIds),
+          inArray(programs.state, ['live', 'scheduled']),
+          lt(programs.startsAt, new Date(spanEnd)),
+          gt(programs.endsAt, new Date(spanStart)),
+        ),
+      )
+      .all();
+
+    const libraryRows = db
+      .select()
+      .from(programs)
+      .where(and(inArray(programs.channelId, channelIds), eq(programs.state, 'aired')))
+      .orderBy(desc(programs.startsAt))
+      .limit(LIBRARY_LIMIT)
+      .all();
+
+    const detail = new Map([...appointmentRows, ...libraryRows].map((r) => [r.id, r]));
+
+    const appointments: Appointment[] = appointmentRows.map((r) => ({
+      programId: r.id,
+      startsAt: r.startsAt.getTime(),
+      endsAt: r.endsAt.getTime(),
+    }));
+
+    const library: LibraryItem[] = libraryRows.map((r) => ({
+      programId: r.id,
+      durationMs: r.endsAt.getTime() - r.startsAt.getTime(),
+    }));
+
+    const placements = programmeWindow(subject.id, fromMs, toMs, appointments, library);
+
+    const slots: GuideSlot[] = [];
+    for (const [index, placement] of placements.entries()) {
+      const row = detail.get(placement.programId);
+      if (!row) continue;
+      const channel = byChannel.get(row.channelId);
+
+      slots.push({
+        key: `${placement.programId}:${placement.startsAt}:${index}`,
+        programId: row.id,
+        title: row.title,
+        category: row.category,
+        startsAt: placement.startsAt,
+        endsAt: placement.endsAt,
+        state: row.state,
+        endsAtProvisional: placement.isAppointment && row.endsAtProvisional,
+        isAppointment: placement.isAppointment,
+        isUpload: row.isUpload,
+        originalStartsAt: row.startsAt.getTime(),
+        canonicalUrl: row.canonicalUrl,
+        platformRef: row.platformRef,
+        vodRef: row.vodRef,
+        channelId: row.channelId,
+        channelName: channel?.displayName ?? '',
+        channelLogin: channel?.login ?? '',
+        platform: channel?.platform ?? 'twitch',
+      });
+    }
+
+    out.push({ id: subject.id, name: subject.name, channelNames, slots });
+  }
+
+  return { from: fromMs, to: toMs, subjects: out };
 }

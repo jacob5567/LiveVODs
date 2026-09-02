@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryQuotaLedger } from '@/lib/ingest/quota';
-import { QuotaExhaustedError, YouTubeConnector, uploadsPlaylistId } from './youtube';
+import {
+  QuotaExhaustedError,
+  YouTubeConnector,
+  parseIsoDuration,
+  uploadsPlaylistId,
+} from './youtube';
 import type { ChannelRef } from './types';
 import type {
   LiveObservation,
@@ -61,6 +66,21 @@ describe('uploadsPlaylistId', () => {
 
   it('returns nothing for an id that is not a channel id', () => {
     expect(uploadsPlaylistId('PLplaylist')).toBeNull();
+  });
+});
+
+describe('parseIsoDuration', () => {
+  it.each([
+    ['PT12M34S', (12 * 60 + 34) * 1000],
+    ['PT1H2M3S', ((60 + 2) * 60 + 3) * 1000],
+    ['PT45S', 45_000],
+    ['P1DT2H', 26 * 60 * 60 * 1000],
+    // Live broadcasts report P0D; zero is rejected by the caller.
+    ['P0D', 0],
+    [undefined, 0],
+    ['nonsense', 0],
+  ])('parses %s', (input, expected) => {
+    expect(parseIsoDuration(input as string | undefined)).toBe(expected);
   });
 });
 
@@ -201,9 +221,23 @@ describe('mapping videos to observations', () => {
     expect(obs.vodRef).toBe('vid-1');
   });
 
-  it('ignores ordinary uploads, which are not broadcasts', async () => {
-    // No liveStreamingDetails at all — a normal video. This is a guide to live
-    // programming, so it has no slot on the grid.
+  it('takes an ordinary upload as library content, with its real length', async () => {
+    // No liveStreamingDetails — a normal video. It never aired, but the guide
+    // programmes it into gaps, which is what stops an upload-only channel's
+    // subject row sitting permanently empty.
+    mockYouTube({
+      playlistItems: { items: [{ contentDetails: { videoId: 'vid-1' } }] },
+      videos: { items: [video({ contentDetails: { duration: 'PT12M34S' } })] },
+    });
+
+    const [obs] = (await connector().fetchSchedule(channel())) as VodObservation[];
+
+    expect(obs.kind).toBe('vod');
+    expect(obs.isUpload).toBe(true);
+    expect(obs.endsAt.getTime() - obs.startsAt.getTime()).toBe((12 * 60 + 34) * 1000);
+  });
+
+  it('drops an upload with no usable duration', async () => {
     mockYouTube({
       playlistItems: { items: [{ contentDetails: { videoId: 'vid-1' } }] },
       videos: { items: [video()] },

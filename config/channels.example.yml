@@ -6,27 +6,37 @@
 #
 # channels.yml is gitignored, so your own lineup stays out of the repository.
 #
+# A subject is one row on the guide — the equivalent of a cable channel. It
+# pools several creators, because one creator rarely publishes enough to fill a
+# timeline on their own. Row order here is row order on the grid.
+#
 # Twitch entries are login names, exactly as in twitch.tv/<login>.
 # YouTube entries are handles including the leading @, as in youtube.com/@<handle>.
 #
-# The sync resolves each to a stable platform id and stores that, so a channel
-# that later renames itself keeps its history. Removing a channel here does not
-# delete it — sync never disables anything, so an entry you drop stops being
-# updated but keeps the programs already ingested.
+# A channel may appear in more than one subject; its programs show up on every
+# row it belongs to. Both platform lists are optional.
+#
+# How a row fills: anything live or scheduled is an appointment and sits at its
+# real time. Everything already published — YouTube uploads, past streams and
+# Twitch VODs — becomes the library that fills the gaps around those
+# appointments, so a row is never blank. Give each subject enough back
+# catalogue to fill a day and it behaves like a real channel.
 
-twitch:
-  - theprimeagen
-  - tsoding
-  - piratesoftware
-  - cohhcarnage
-  - northernlion
+subjects:
+  - name: Speedrunning
+    twitch:
+      - GamesDoneQuick
+      - SimpleFlips
+    youtube:
+      - "@SimpleFlips"
 
-# A caveat worth knowing before you fill this in: LiveVODs is a guide to live
-# programming, so a YouTube channel earns a row only through streams and
-# premieres. Channels that publish ordinary uploads and never go live have no
-# broadcasts to show, and will sit as permanently empty rows — the connector
-# skips any video without liveStreamingDetails on purpose. Pick channels that
-# actually stream.
-youtube:
-  - "@LinusTechTips"
-  - "@ThePrimeTimeagen"
+  - name: Coffee
+    youtube:
+      - "@jameshoffmann"
+
+  - name: Programming
+    twitch:
+      - theprimeagen
+      - tsoding
+    youtube:
+      - "@ThePrimeTimeagen"

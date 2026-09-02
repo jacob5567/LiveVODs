@@ -1,6 +1,6 @@
 'use client';
 
-import type { GuideProgram } from '@/lib/guide';
+import type { GuideSlot } from '@/lib/guide';
 import { PX_PER_MINUTE, MINUTE_MS } from '@/lib/time';
 import styles from './ProgramCell.module.css';
 
@@ -14,58 +14,77 @@ function formatTime(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
+function formatDate(ms: number): string {
+  return new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
 const px = (ms: number) => (ms / MINUTE_MS) * PX_PER_MINUTE;
 
 export function ProgramCell({
-  program,
+  slot,
   viewportStart,
   viewportEnd,
   selected = false,
   onSelect,
 }: {
-  program: GuideProgram;
+  slot: GuideSlot;
   viewportStart: number;
   viewportEnd: number;
   selected?: boolean;
-  onSelect: (program: GuideProgram) => void;
+  onSelect: (slot: GuideSlot) => void;
 }) {
-  // A program that began before the window (or runs past it) is clipped to the
+  // A programme that began before the window (or runs past it) is clipped to the
   // window rather than positioned off-screen — otherwise its label sits at a
   // negative offset and the bar renders blank.
-  const startsBefore = program.startsAt < viewportStart;
-  const endsAfter = program.endsAt > viewportEnd;
+  const startsBefore = slot.startsAt < viewportStart;
+  const endsAfter = slot.endsAt > viewportEnd;
 
-  const left = Math.max(0, px(program.startsAt - viewportStart));
-  const right = Math.min(px(viewportEnd - viewportStart), px(program.endsAt - viewportStart));
+  const left = Math.max(0, px(slot.startsAt - viewportStart));
+  const right = Math.min(px(viewportEnd - viewportStart), px(slot.endsAt - viewportStart));
   const width = Math.max(2, right - left);
 
-  const isLive = program.state === 'live';
-  const isMissed = program.state === 'missed';
+  const isLive = slot.state === 'live' && slot.isAppointment;
+  const isMissed = slot.state === 'missed';
   const roomForLabel = width >= MIN_LABEL_PX;
 
-  const classes = [styles.cell, styles[program.state]];
-  if (isLive && program.endsAtProvisional) classes.push(styles.ongoing);
+  const classes = [styles.cell, styles[slot.state]];
+  if (isLive && slot.endsAtProvisional) classes.push(styles.ongoing);
+  // Library content is playing at a time it never aired, so it reads quieter
+  // than a real broadcast sitting at its own time.
+  if (!slot.isAppointment) classes.push(styles.rerun);
   // Square off a clipped edge so it reads as continuing past the window.
   if (startsBefore) classes.push(styles.clippedStart);
   if (endsAfter) classes.push(styles.clippedEnd);
   if (selected) classes.push(styles.selected);
 
+  // A row pools several creators, so the bar has to say whose programme it is —
+  // the channel column no longer answers that.
   const meta = isMissed
-    ? 'did not air'
-    : [program.category, `${formatTime(program.startsAt)}`].filter(Boolean).join(' · ');
+    ? `${slot.channelName} · did not air`
+    : [slot.channelName, slot.category].filter(Boolean).join(' · ');
+
+  const tooltip = [
+    slot.title,
+    slot.channelName,
+    slot.isAppointment
+      ? `${formatTime(slot.startsAt)} – ${slot.endsAtProvisional ? 'now' : formatTime(slot.endsAt)}`
+      : `${formatTime(slot.startsAt)} – ${formatTime(slot.endsAt)}  ·  ${
+          slot.isUpload ? 'published' : 'aired'
+        } ${formatDate(slot.originalStartsAt)}`,
+  ]
+    .filter(Boolean)
+    .join('\n');
 
   return (
     <button
       type="button"
       className={classes.join(' ')}
       style={{ left, width: Math.max(width, 2) }}
-      data-program={program.id}
+      data-program={slot.programId}
       // Narrow bars have no visible label, so the tooltip carries the detail.
-      title={`${program.title}${program.category ? ` — ${program.category}` : ''}\n${formatTime(
-        program.startsAt,
-      )} – ${program.endsAtProvisional ? 'now' : formatTime(program.endsAt)}`}
+      title={tooltip}
       disabled={isMissed}
-      onClick={() => onSelect(program)}
+      onClick={() => onSelect(slot)}
     >
       {roomForLabel && (
         /**
@@ -88,7 +107,7 @@ export function ProgramCell({
               LIVE
             </span>
           )}
-          <span className={styles.title}>{program.title}</span>
+          <span className={styles.title}>{slot.title}</span>
           <span className={styles.meta}>{meta}</span>
         </span>
       )}

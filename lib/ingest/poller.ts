@@ -9,7 +9,7 @@
  */
 import { and, eq } from 'drizzle-orm';
 import { db } from '@/lib/db';
-import { channels, channelSyncState, type Platform } from '@/drizzle/schema';
+import { channels, channelSyncState, subjectChannels, type Platform } from '@/drizzle/schema';
 import type { ChannelRef, Connector } from '@/lib/connectors/types';
 import { QuotaExhaustedError } from '@/lib/connectors/youtube';
 import type { Observation } from './reconcile';
@@ -33,7 +33,11 @@ function enabledChannels(platform: Platform): ChannelRef[] {
       login: channels.login,
     })
     .from(channels)
+    // Only channels that feed a subject are worth spending quota on: a channel
+    // on no row cannot be seen, so polling it buys nothing.
+    .innerJoin(subjectChannels, eq(subjectChannels.channelId, channels.id))
     .where(and(eq(channels.platform, platform), eq(channels.enabled, true)))
+    .groupBy(channels.id)
     .all()
     // Rows planted by scripts/seed-demo.ts are not real channels; polling them
     // would report every demo stream as offline and wreck the fixture.

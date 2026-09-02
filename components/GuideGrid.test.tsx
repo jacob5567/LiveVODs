@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { Guide } from '@/lib/guide';
+import type { Guide, GuideSlot } from '@/lib/guide';
 import { GuideGrid } from './GuideGrid';
 
 /**
@@ -19,43 +19,47 @@ function guide(): Guide {
   return {
     from: NOW - 4 * 60 * MIN,
     to: NOW + 12 * 60 * MIN,
-    channels: [
+    subjects: [
       {
         id: 1,
-        platform: 'twitch',
-        login: 'alice',
-        displayName: 'Alice',
-        avatarUrl: null,
-        programs: [
-          program(10, 'Alpha', NOW - 120 * MIN, NOW - 60 * MIN),
-          program(11, 'Beta', NOW - 30 * MIN, NOW + 30 * MIN),
-          program(12, 'Gamma', NOW + 60 * MIN, NOW + 120 * MIN),
+        name: 'Speedrunning',
+        channelNames: ['Alice', 'Bob'],
+        slots: [
+          slot(10, 'Alpha', NOW - 120 * MIN, NOW - 60 * MIN),
+          slot(11, 'Beta', NOW - 30 * MIN, NOW + 30 * MIN),
+          slot(12, 'Gamma', NOW + 60 * MIN, NOW + 120 * MIN),
         ],
       },
       {
         id: 2,
-        platform: 'youtube',
-        login: '@bob',
-        displayName: 'Bob',
-        avatarUrl: null,
-        programs: [program(20, 'Delta', NOW - 30 * MIN, NOW + 30 * MIN)],
+        name: 'Coffee',
+        channelNames: ['Carol'],
+        slots: [slot(20, 'Delta', NOW - 30 * MIN, NOW + 30 * MIN)],
       },
     ],
   };
 }
 
-function program(id: number, title: string, startsAt: number, endsAt: number) {
+function slot(programId: number, title: string, startsAt: number, endsAt: number): GuideSlot {
   return {
-    id,
-    platformRef: `ref-${id}`,
+    key: `k${programId}`,
+    programId,
+    platformRef: `ref-${programId}`,
     title,
     category: null,
     startsAt,
     endsAt,
     endsAtProvisional: false,
-    state: 'aired' as const,
+    state: 'aired',
+    isAppointment: true,
+    isUpload: false,
+    originalStartsAt: startsAt,
     canonicalUrl: 'https://twitch.tv/alice',
     vodRef: null,
+    channelId: 1,
+    channelName: 'Alice',
+    channelLogin: 'alice',
+    platform: 'twitch',
   };
 }
 
@@ -177,8 +181,8 @@ describe('GuideGrid', () => {
   });
 
   it('explains how to populate an empty lineup', () => {
-    render(<GuideGrid guide={{ from: NOW, to: NOW + 1000, channels: [] }} />);
-    expect(screen.getByText(/No channels in the lineup yet/i)).toBeTruthy();
+    render(<GuideGrid guide={{ from: NOW, to: NOW + 1000, subjects: [] }} />);
+    expect(screen.getByText(/No subjects in the lineup yet/i)).toBeTruthy();
     expect(screen.getByText('config/channels.yml')).toBeTruthy();
   });
 });

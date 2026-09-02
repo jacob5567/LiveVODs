@@ -57,6 +57,7 @@ interface YouTubeVideo {
     liveBroadcastContent: 'live' | 'upcoming' | 'none';
     thumbnails?: { medium?: { url: string }; high?: { url: string } };
   };
+  contentDetails?: { duration?: string };
   liveStreamingDetails?: {
     scheduledStartTime?: string;
     actualStartTime?: string;
@@ -93,6 +94,25 @@ export class QuotaExhaustedError extends Error {
  */
 export function uploadsPlaylistId(channelId: string): string | null {
   return channelId.startsWith('UC') ? `UU${channelId.slice(2)}` : null;
+}
+
+/**
+ * YouTube reports length as an ISO 8601 duration: PT1H2M3S, PT45S, P1DT2H.
+ * Live broadcasts report P0D, which is correctly read as zero and rejected by
+ * the caller.
+ */
+export function parseIsoDuration(duration: string | undefined): number {
+  if (!duration) return 0;
+  const match = duration.match(
+    /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/,
+  );
+  if (!match) return 0;
+
+  const [, d, h, m, s] = match;
+  return (
+    ((Number(d ?? 0) * 24 + Number(h ?? 0)) * 60 + Number(m ?? 0)) * 60_000 +
+    Math.round(Number(s ?? 0) * 1000)
+  );
 }
 
 const thumb = (v: YouTubeVideo): string | null =>
@@ -233,7 +253,7 @@ export class YouTubeConnector implements Connector {
 
     for (const batch of chunk(unique, VIDEO_BATCH)) {
       const params = new URLSearchParams({
-        part: 'snippet,liveStreamingDetails',
+        part: 'snippet,contentDetails,liveStreamingDetails',
         id: batch.join(','),
         maxResults: String(VIDEO_BATCH),
       });
@@ -256,9 +276,6 @@ export class YouTubeConnector implements Connector {
       if (!channel) continue;
 
       const details = video.liveStreamingDetails;
-      // No liveStreamingDetails at all means an ordinary upload, not a
-      // broadcast. This is a guide to live programming, so it has no slot.
-      if (!details) continue;
 
       const common = {
         channelId: channel.id,
@@ -267,6 +284,26 @@ export class YouTubeConnector implements Connector {
         canonicalUrl: watchUrl(video.id),
         thumbnailUrl: thumb(video),
       };
+
+      // No liveStreamingDetails means an ordinary upload. It never aired, but
+      // it is library content: the guide programmes it into the gaps between
+      // real broadcasts, which is what keeps an upload-only channel's row from
+      // sitting permanently empty.
+      if (!details) {
+        const durationMs = parseIsoDuration(video.contentDetails?.duration);
+        if (durationMs <= 0) continue;
+
+        const publishedAt = new Date(video.snippet.publishedAt);
+        observations.push({
+          kind: 'vod',
+          ...common,
+          vodRef: video.id,
+          startsAt: publishedAt,
+          endsAt: new Date(publishedAt.getTime() + durationMs),
+          isUpload: true,
+        });
+        continue;
+      }
 
       if (details.actualEndTime && details.actualStartTime) {
         observations.push({

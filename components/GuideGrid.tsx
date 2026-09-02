@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Guide, GuideChannel, GuideProgram } from '@/lib/guide';
+import type { Guide, GuideSlot } from '@/lib/guide';
 import { MINUTE_MS, PX_PER_MINUTE } from '@/lib/time';
 import { ProgramCell } from './ProgramCell';
 import { PlayerPane, type Selection } from './PlayerPane';
@@ -48,15 +48,17 @@ export function GuideGrid({
   const [selection, setSelection] = useState<Selection | null>(null);
 
   /**
-   * The selection holds objects captured at click time. Re-resolving them
-   * against the current guide keeps the open player honest — a broadcast that
-   * ends while being watched stops claiming to be live.
+   * The selection holds a slot captured at click time. Re-resolving it against
+   * the current guide keeps the open player honest — a broadcast that ends
+   * while being watched stops claiming to be live.
    */
   const currentSelection = useMemo(() => {
     if (!selection) return null;
-    const channel = guide.channels.find((c) => c.id === selection.channel.id);
-    const program = channel?.programs.find((p) => p.id === selection.program.id);
-    return channel && program ? { channel, program } : selection;
+    for (const subject of guide.subjects) {
+      const slot = subject.slots.find((s) => s.key === selection.slot.key);
+      if (slot) return { slot };
+    }
+    return selection;
   }, [selection, guide]);
 
   useEffect(() => {
@@ -162,8 +164,8 @@ export function GuideGrid({
   const nudge = (hours: number) =>
     scroller.current?.scrollBy({ left: hours * 60 * PX_PER_MINUTE, behavior: 'smooth' });
 
-  const handleSelect = useCallback((program: GuideProgram, channel: GuideChannel) => {
-    setSelection({ program, channel });
+  const handleSelect = useCallback((slot: GuideSlot) => {
+    setSelection({ slot });
   }, []);
 
   /**
@@ -223,21 +225,22 @@ export function GuideGrid({
     next.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, []);
 
-  const liveCount = guide.channels.reduce(
-    (n, c) => n + c.programs.filter((p) => p.state === 'live').length,
+  // Only real broadcasts count as live; a repeat filling a gap does not.
+  const liveCount = guide.subjects.reduce(
+    (n, s) => n + s.slots.filter((slot) => slot.state === 'live' && slot.isAppointment).length,
     0,
   );
 
-  if (guide.channels.length === 0) {
+  if (guide.subjects.length === 0) {
     return (
       <div className={styles.wrap} style={CSS_VARS}>
         <Toolbar liveCount={0} onNow={scrollToNow} onNudge={nudge} />
         <div className={styles.empty}>
-          <p>No channels in the lineup yet.</p>
+          <p>No subjects in the lineup yet.</p>
           <p>
-            Add some to <code>config/channels.yml</code>, then run{' '}
-            <code>npm run channels:sync</code>. To try the guide without API
-            credentials, run <code>npx tsx scripts/seed-demo.ts</code>.
+            Each row of the guide is a subject pooling several channels. Define some in{' '}
+            <code>config/channels.yml</code>, then run <code>npm run channels:sync</code>. To try
+            the guide without API credentials, run <code>npx tsx scripts/seed-demo.ts</code>.
           </p>
         </div>
       </div>
@@ -283,30 +286,30 @@ export function GuideGrid({
           role="grid"
           tabIndex={-1}
         >
-          {guide.channels.map((channel) => (
-            <div key={channel.id} className={styles.row} style={{ height: ROW_H }}>
+          {guide.subjects.map((subject) => (
+            <div key={subject.id} className={styles.row} style={{ height: ROW_H }}>
               <div className={styles.channel} style={{ width: CHANNEL_COL_W }}>
-                {channel.avatarUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img className={styles.avatar} src={channel.avatarUrl} alt="" />
-                ) : (
-                  <div className={styles.avatar} />
-                )}
                 <div className={styles.channelText}>
-                  <div className={styles.channelName}>{channel.displayName}</div>
-                  <div className={styles.platform}>{channel.platform}</div>
+                  <div className={styles.channelName}>{subject.name}</div>
+                  <div className={styles.platform}>
+                    {subject.channelNames.length === 0
+                      ? 'no channels'
+                      : `${subject.channelNames.length} channel${
+                          subject.channelNames.length === 1 ? '' : 's'
+                        }`}
+                  </div>
                 </div>
               </div>
 
-              <div className={styles.lane} style={{ width: totalWidth }} data-lane={channel.id}>
-                {channel.programs.map((program) => (
+              <div className={styles.lane} style={{ width: totalWidth }} data-lane={subject.id}>
+                {subject.slots.map((slot) => (
                   <ProgramCell
-                    key={program.id}
-                    program={program}
+                    key={slot.key}
+                    slot={slot}
                     viewportStart={guide.from}
                     viewportEnd={guide.to}
-                    selected={selection?.program.id === program.id}
-                    onSelect={(p) => handleSelect(p, channel)}
+                    selected={selection?.slot.key === slot.key}
+                    onSelect={handleSelect}
                   />
                 ))}
               </div>

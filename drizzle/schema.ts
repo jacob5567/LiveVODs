@@ -34,6 +34,44 @@ export const channels = sqliteTable(
   (t) => [uniqueIndex('channels_platform_id_idx').on(t.platform, t.platformChannelId)],
 );
 
+/**
+ * A themed row on the guide — the equivalent of a cable channel.
+ *
+ * Rows are subjects rather than individual creators, because one creator rarely
+ * produces enough to fill a timeline. A subject pools several channels so its
+ * row always has something to show.
+ */
+export const subjects = sqliteTable(
+  'subjects',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    name: text('name').notNull(),
+    /** Row order on the grid, taken from the order in config/channels.yml. */
+    position: integer('position').notNull().default(0),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => [uniqueIndex('subjects_name_idx').on(t.name)],
+);
+
+/**
+ * Which channels feed which subject. Many-to-many on purpose: a creator who
+ * covers two topics belongs on both rows, and their programs appear in both.
+ */
+export const subjectChannels = sqliteTable(
+  'subject_channels',
+  {
+    subjectId: integer('subject_id')
+      .notNull()
+      .references(() => subjects.id, { onDelete: 'cascade' }),
+    channelId: integer('channel_id')
+      .notNull()
+      .references(() => channels.id, { onDelete: 'cascade' }),
+  },
+  (t) => [primaryKey({ columns: [t.subjectId, t.channelId] })],
+);
+
 export const PROGRAM_STATES = ['scheduled', 'live', 'aired', 'missed'] as const;
 export type ProgramState = (typeof PROGRAM_STATES)[number];
 
@@ -70,6 +108,12 @@ export const programs = sqliteTable(
     thumbnailUrl: text('thumbnail_url'),
     /** Playable id for an aired program: Twitch video id or YouTube video id. */
     vodRef: text('vod_ref'),
+    /**
+     * True for an ordinary YouTube upload — library content that was never a
+     * broadcast. It still fills a slot on the grid, but its start time is when
+     * it was published, not when anything aired.
+     */
+    isUpload: integer('is_upload', { mode: 'boolean' }).notNull().default(false),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
       .notNull()
       .default(sql`(unixepoch() * 1000)`),
@@ -115,5 +159,6 @@ export const apiBudget = sqliteTable(
 
 export type ChannelRow = typeof channels.$inferSelect;
 export type NewChannelRow = typeof channels.$inferInsert;
+export type SubjectRow = typeof subjects.$inferSelect;
 export type ProgramDbRow = typeof programs.$inferSelect;
 export type NewProgramDbRow = typeof programs.$inferInsert;

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import type { GuideChannel, GuideProgram } from '@/lib/guide';
+import type { GuideSlot } from '@/lib/guide';
 import {
   embedBlockedByProtocol,
   embedParents,
@@ -10,18 +10,22 @@ import {
 } from '@/lib/embed';
 import styles from './PlayerPane.module.css';
 
+/** A slot carries its own channel now, since a row pools several. */
 export interface Selection {
-  program: GuideProgram;
-  channel: GuideChannel;
+  slot: GuideSlot;
 }
 
 const formatTime = (ms: number) =>
   new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 
-const formatRange = (program: GuideProgram) =>
-  `${formatTime(program.startsAt)} – ${
-    program.endsAtProvisional ? 'now' : formatTime(program.endsAt)
-  }`;
+const formatRange = (slot: GuideSlot) =>
+  `${formatTime(slot.startsAt)} – ${slot.endsAtProvisional ? 'now' : formatTime(slot.endsAt)}`;
+
+const formatOriginal = (slot: GuideSlot) =>
+  `${slot.isUpload ? 'Published' : 'Aired'} ${new Date(slot.originalStartsAt).toLocaleDateString(
+    [],
+    { month: 'short', day: 'numeric', year: 'numeric' },
+  )}`;
 
 export function PlayerPane({
   selection,
@@ -32,7 +36,7 @@ export function PlayerPane({
   extraParents: string[];
   onClose: () => void;
 }) {
-  const { program, channel } = selection;
+  const { slot } = selection;
 
   // The embed needs the browser's own hostname, which only exists client-side.
   // Until it resolves the pane renders its chrome without an iframe.
@@ -53,13 +57,13 @@ export function PlayerPane({
   const target = useMemo(
     () =>
       embedTargetFor({
-        platform: channel.platform,
-        login: channel.login,
-        platformRef: program.platformRef,
-        vodRef: program.vodRef,
-        state: program.state,
+        platform: slot.platform,
+        login: slot.channelLogin,
+        platformRef: slot.platformRef,
+        vodRef: slot.vodRef,
+        state: slot.state,
       }),
-    [channel.platform, channel.login, program.platformRef, program.vodRef, program.state],
+    [slot.platform, slot.channelLogin, slot.platformRef, slot.vodRef, slot.state],
   );
 
   const src = useMemo(() => {
@@ -68,11 +72,12 @@ export function PlayerPane({
   }, [target, location, extraParents]);
 
   const needsHttps =
-    channel.platform === 'twitch' &&
+    slot.platform === 'twitch' &&
     location !== null &&
     embedBlockedByProtocol(location.protocol, location.hostname);
 
-  const isLive = program.state === 'live';
+  // A repeat of a past broadcast is not live, whatever the source programme says.
+  const isLive = slot.state === 'live' && slot.isAppointment;
 
   return (
     <div className={styles.pane}>
@@ -81,7 +86,7 @@ export function PlayerPane({
           <iframe
             key={src}
             src={src}
-            title={program.title}
+            title={slot.title}
             allowFullScreen
             allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
           />
@@ -90,7 +95,7 @@ export function PlayerPane({
             {target.kind === 'unavailable' ? (
               <>
                 <strong>{target.reason}</strong>
-                <span>Open it on {channel.platform} instead.</span>
+                <span>Open it on {slot.platform} instead.</span>
               </>
             ) : (
               <span>Loading player…</span>
@@ -108,24 +113,30 @@ export function PlayerPane({
             </span>
           ) : (
             <span className={`${styles.badge} ${styles.badgeMuted}`}>
-              {program.state.toUpperCase()}
+              {slot.isAppointment ? slot.state.toUpperCase() : 'REPEAT'}
             </span>
           )}
         </div>
 
-        <div className={styles.title}>{program.title}</div>
+        <div className={styles.title}>{slot.title}</div>
         <div className={styles.channel}>
-          {channel.displayName} · {channel.platform}
+          {slot.channelName} · {slot.platform}
         </div>
 
         <div className={styles.meta}>
-          {program.category && (
+          {slot.category && (
             <>
-              {program.category}
+              {slot.category}
               <br />
             </>
           )}
-          {formatRange(program)}
+          {formatRange(slot)}
+          {!slot.isAppointment && (
+            <>
+              <br />
+              {formatOriginal(slot)}
+            </>
+          )}
         </div>
 
         {needsHttps && (
@@ -140,11 +151,11 @@ export function PlayerPane({
         <div className={styles.actions}>
           <a
             className={styles.button}
-            href={program.canonicalUrl}
+            href={slot.canonicalUrl}
             target="_blank"
             rel="noopener noreferrer"
           >
-            Open on {channel.platform} ↗
+            Open on {slot.platform} ↗
           </a>
           <button type="button" className={styles.button} onClick={onClose}>
             Close

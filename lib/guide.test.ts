@@ -2,7 +2,8 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { HOUR_MS, MINUTE_MS } from '@/lib/time';
+import { MINUTE_MS } from '@/lib/time';
+import { dayBounds } from '@/lib/schedule';
 
 // Must be set before lib/db is imported: it resolves the path at module load.
 process.env.DATABASE_PATH = join(mkdtempSync(join(tmpdir(), 'livevods-guide-')), 'test.db');
@@ -10,16 +11,21 @@ process.env.DATABASE_PATH = join(mkdtempSync(join(tmpdir(), 'livevods-guide-')),
 type Mod = {
   db: typeof import('@/lib/db')['db'];
   channels: typeof import('@/drizzle/schema')['channels'];
+  subjects: typeof import('@/drizzle/schema')['subjects'];
+  subjectChannels: typeof import('@/drizzle/schema')['subjectChannels'];
   programs: typeof import('@/drizzle/schema')['programs'];
   loadGuideWindow: typeof import('./guide')['loadGuideWindow'];
   guideRevision: typeof import('./guide')['guideRevision'];
 };
 
 const m = {} as Mod;
-const NOW = new Date('2026-09-01T20:00:00.000Z');
+
+/** Midday local, so a ±few-hour window stays inside one programming day. */
+const NOW = new Date(dayBounds(Date.parse('2026-09-02T12:00:00')).start + 12 * 60 * MINUTE_MS);
 const at = (minutes: number) => new Date(NOW.getTime() + minutes * MINUTE_MS);
 
 let channelId: number;
+let subjectId: number;
 
 beforeAll(async () => {
   const dbMod = await import('@/lib/db');
@@ -30,6 +36,8 @@ beforeAll(async () => {
   Object.assign(m, {
     db: dbMod.db,
     channels: schema.channels,
+    subjects: schema.subjects,
+    subjectChannels: schema.subjectChannels,
     programs: schema.programs,
     loadGuideWindow: guide.loadGuideWindow,
     guideRevision: guide.guideRevision,
@@ -40,9 +48,11 @@ beforeAll(async () => {
 
 beforeEach(() => {
   m.db.delete(m.programs).run();
+  m.db.delete(m.subjectChannels).run();
+  m.db.delete(m.subjects).run();
   m.db.delete(m.channels).run();
 
-  const [row] = m.db
+  const [channel] = m.db
     .insert(m.channels)
     .values({
       platform: 'twitch',
@@ -53,73 +63,151 @@ beforeEach(() => {
     })
     .returning({ id: m.channels.id })
     .all();
-  channelId = row.id;
+  channelId = channel.id;
+
+  const [subject] = m.db
+    .insert(m.subjects)
+    .values({ name: 'Speedrunning', position: 0 })
+    .returning({ id: m.subjects.id })
+    .all();
+  subjectId = subject.id;
+
+  m.db.insert(m.subjectChannels).values({ subjectId, channelId }).run();
 });
 
-function insertProgram(startMin: number, endMin: number, ref = `ref-${startMin}`) {
+function insertProgram(
+  startMin: number,
+  endMin: number,
+  overrides: Partial<{ state: 'scheduled' | 'live' | 'aired' | 'missed'; ref: string; isUpload: boolean; title: string }> = {},
+) {
   m.db
     .insert(m.programs)
     .values({
       channelId,
-      platformRef: ref,
-      title: `Program ${ref}`,
+      platformRef: overrides.ref ?? `ref-${startMin}-${endMin}`,
+      title: overrides.title ?? `Program ${startMin}`,
       category: null,
       startsAt: at(startMin),
       endsAt: at(endMin),
       endsAtProvisional: false,
-      state: 'aired',
+      state: overrides.state ?? 'aired',
       canonicalUrl: 'https://twitch.tv/alice',
       thumbnailUrl: null,
       vodRef: null,
+      isUpload: overrides.isUpload ?? false,
       updatedAt: NOW,
     })
     .run();
 }
 
-const programsIn = (fromMin: number, toMin: number) =>
-  m.loadGuideWindow(at(fromMin), at(toMin)).channels.flatMap((c) => c.programs);
+const guideNow = () => m.loadGuideWindow(at(-60), at(180));
+const slots = () => guideNow().subjects[0].slots;
 
-describe('loadGuideWindow', () => {
-  it('includes a program that started before the window and is still running', () => {
-    // The case that matters most: a long stream begun hours ago. Selecting only
-    // programs that *start* inside the window would drop it entirely.
-    insertProgram(-300, 60);
-    expect(programsIn(-60, 180)).toHaveLength(1);
+describe('subject rows', () => {
+  it('returns one row per subject, not per channel', () => {
+    const [second] = m.db
+      .insert(m.channels)
+      .values({
+        platform: 'youtube',
+        platformChannelId: 'UCx',
+        login: '@bob',
+        displayName: 'Bob',
+        enabled: true,
+      })
+      .returning({ id: m.channels.id })
+      .all();
+    m.db.insert(m.subjectChannels).values({ subjectId, channelId: second.id }).run();
+
+    const guide = guideNow();
+    expect(guide.subjects).toHaveLength(1);
+    expect(guide.subjects[0].channelNames.sort()).toEqual(['Alice', 'Bob']);
   });
 
-  it('includes a program that runs past the end of the window', () => {
-    insertProgram(120, 600);
-    expect(programsIn(-60, 180)).toHaveLength(1);
+  it('keeps a subject with no channels as an empty row', () => {
+    m.db.insert(m.subjects).values({ name: 'Empty', position: 1 }).run();
+
+    const guide = guideNow();
+    expect(guide.subjects.map((s) => s.name)).toEqual(['Speedrunning', 'Empty']);
+    expect(guide.subjects[1].slots).toEqual([]);
   });
 
-  it('excludes programs wholly outside the window', () => {
-    insertProgram(-600, -400, 'long-past');
-    insertProgram(600, 800, 'far-future');
-    expect(programsIn(-60, 180)).toHaveLength(0);
+  it('orders rows by configured position', () => {
+    m.db.insert(m.subjects).values({ name: 'Later', position: 5 }).run();
+    m.db.insert(m.subjects).values({ name: 'Earlier', position: -1 }).run();
+
+    expect(guideNow().subjects.map((s) => s.name)).toEqual([
+      'Earlier',
+      'Speedrunning',
+      'Later',
+    ]);
   });
 
-  it('treats the window as half-open so touching programs do not both appear', () => {
-    // Ends exactly at the window start.
-    insertProgram(-120, -60, 'ends-at-start');
-    expect(programsIn(-60, 180)).toHaveLength(0);
+  it('names the channel on every slot, since a row pools several', () => {
+    insertProgram(-30, 30, { state: 'live' });
+    expect(slots().every((s) => s.channelName === 'Alice')).toBe(true);
+  });
+});
+
+describe('appointments versus library', () => {
+  it('places a live broadcast at its real time', () => {
+    insertProgram(-30, 30, { state: 'live', ref: 'live-1' });
+
+    const appointment = slots().find((s) => s.isAppointment)!;
+    expect(appointment.startsAt).toBe(at(-30).getTime());
+    expect(appointment.endsAt).toBe(at(30).getTime());
   });
 
-  it('returns channels with no programs, so the lineup stays stable', () => {
-    // A channel that has not streamed still needs its row on the grid.
-    const guide = m.loadGuideWindow(at(-60), at(180));
-    expect(guide.channels).toHaveLength(1);
-    expect(guide.channels[0].programs).toEqual([]);
+  it('schedules aired content as library fill, away from its real time', () => {
+    // A single 40-minute VOD from a week ago. It has to appear somewhere in
+    // today's window even though it aired nowhere near it.
+    insertProgram(-60 * 24 * 7, -60 * 24 * 7 + 40, { ref: 'old-vod' });
+
+    const fill = slots().filter((s) => !s.isAppointment);
+    expect(fill.length).toBeGreaterThan(0);
+    expect(fill[0].originalStartsAt).toBe(at(-60 * 24 * 7).getTime());
+    expect(fill[0].startsAt).not.toBe(fill[0].originalStartsAt);
   });
 
+  it('carries upload provenance through to the slot', () => {
+    insertProgram(-60 * 24 * 3, -60 * 24 * 3 + 30, { ref: 'upload-1', isUpload: true });
+    expect(slots().some((s) => s.isUpload && !s.isAppointment)).toBe(true);
+  });
+
+  it('gives each placement a distinct key even when a programme repeats', () => {
+    insertProgram(-60 * 24 * 5, -60 * 24 * 5 + 45, { ref: 'only-one' });
+
+    const keys = slots().map((s) => s.key);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it('does not treat library fill as still-running', () => {
+    insertProgram(-60 * 24 * 2, -60 * 24 * 2 + 30, { ref: 'past' });
+    expect(slots().every((s) => s.isAppointment || !s.endsAtProvisional)).toBe(true);
+  });
+});
+
+describe('window handling', () => {
   it('reports the window it was asked for', () => {
     const guide = m.loadGuideWindow(at(-60), at(180));
     expect(guide.from).toBe(at(-60).getTime());
     expect(guide.to).toBe(at(180).getTime());
   });
 
-  it('carries platformRef through, which the player embeds', () => {
-    insertProgram(0, 60, 'yt-abc');
-    expect(programsIn(-60, 180)[0].platformRef).toBe('yt-abc');
+  it('returns nothing outside the window', () => {
+    insertProgram(-30, 30, { state: 'live' });
+    insertProgram(-60 * 24 * 4, -60 * 24 * 4 + 30, { ref: 'lib' });
+
+    for (const slot of slots()) {
+      expect(slot.endsAt).toBeGreaterThan(at(-60).getTime());
+      expect(slot.startsAt).toBeLessThan(at(180).getTime());
+    }
+  });
+
+  it('is stable across repeated loads, so live updates do not reshuffle it', () => {
+    insertProgram(-60 * 24, -60 * 24 + 30, { ref: 'a' });
+    insertProgram(-60 * 25, -60 * 25 + 45, { ref: 'b' });
+
+    expect(slots().map((s) => s.key)).toEqual(slots().map((s) => s.key));
   });
 });
 
@@ -130,16 +218,15 @@ describe('guideRevision', () => {
   });
 
   it('changes when a program is added', () => {
-    insertProgram(0, 60, 'a');
+    insertProgram(0, 60, { ref: 'a' });
     const before = m.guideRevision();
 
-    insertProgram(120, 180, 'b');
+    insertProgram(120, 180, { ref: 'b' });
     expect(m.guideRevision()).not.toBe(before);
   });
 
   it('changes when a program is removed', () => {
-    insertProgram(0, 60, 'a');
-    insertProgram(120, 180, 'b');
+    insertProgram(0, 60, { ref: 'a' });
     const before = m.guideRevision();
 
     // Count is part of the token precisely so deletions register — a delete
@@ -149,7 +236,6 @@ describe('guideRevision', () => {
   });
 
   it('survives an empty table', () => {
-    expect(() => m.guideRevision()).not.toThrow();
     expect(m.guideRevision()).toBe('0:0');
   });
 });

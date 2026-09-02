@@ -49,6 +49,7 @@ export function loadWorkingSet(channelIds: number[], now: Date): ProgramRecord[]
         canonicalUrl: row.canonicalUrl,
         thumbnailUrl: row.thumbnailUrl,
         vodRef: row.vodRef,
+        isUpload: row.isUpload,
       }),
     );
 }

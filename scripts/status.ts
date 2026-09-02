@@ -13,11 +13,26 @@ async function main(): Promise<void> {
   loadEnv();
 
   const { db, DATABASE_PATH } = await import('@/lib/db');
-  const { channels, programs, channelSyncState, apiBudget } = await import('@/drizzle/schema');
+  const { channels, programs, channelSyncState, apiBudget, subjects, subjectChannels } =
+    await import('@/drizzle/schema');
   const { and, eq, sql } = await import('drizzle-orm');
   const { pacificDay } = await import('@/lib/time');
 
   console.log(`database: ${DATABASE_PATH}\n`);
+
+  // Rows on the guide are subjects; channels only feed them.
+  const subjectRows = db.select().from(subjects).orderBy(subjects.position).all();
+  const memberCount = new Map<number, number>();
+  for (const m of db.select().from(subjectChannels).all()) {
+    memberCount.set(m.subjectId, (memberCount.get(m.subjectId) ?? 0) + 1);
+  }
+
+  console.log(`subjects: ${subjectRows.length}`);
+  for (const s of subjectRows) {
+    const n = memberCount.get(s.id) ?? 0;
+    console.log(`  ${s.name.padEnd(24)} ${n} channel${n === 1 ? '' : 's'}${n === 0 ? '  (empty row)' : ''}`);
+  }
+  console.log();
 
   const rows = db.select().from(channels).orderBy(channels.platform, channels.displayName).all();
   const fixtures = rows.filter((c) => c.platformChannelId.startsWith('demo-'));
@@ -26,6 +41,12 @@ async function main(): Promise<void> {
     console.log('No channels. Run: npm run channels:sync');
     return;
   }
+
+  const uploads = db
+    .select({ n: sql<number>`count(*)` })
+    .from(programs)
+    .where(eq(programs.isUpload, true))
+    .get()?.n ?? 0;
 
   console.log(
     `channels: ${rows.length}` +
@@ -72,7 +93,8 @@ async function main(): Promise<void> {
     .all();
 
   console.log(
-    `\nprograms: ${total.map((r) => `${r.state} ${r.n}`).join(', ') || 'none'}`,
+    `\nprograms: ${total.map((r) => `${r.state} ${r.n}`).join(', ') || 'none'}` +
+      `  (${uploads} are youtube uploads, used as library fill)`,
   );
 
   const budget = db

@@ -16,6 +16,8 @@ process.env.DATABASE_PATH = join(mkdtempSync(join(tmpdir(), 'livevods-')), 'test
 type Mod = {
   db: typeof import('@/lib/db')['db'];
   channels: typeof import('@/drizzle/schema')['channels'];
+  subjects: typeof import('@/drizzle/schema')['subjects'];
+  subjectChannels: typeof import('@/drizzle/schema')['subjectChannels'];
   programs: typeof import('@/drizzle/schema')['programs'];
   runLiveTick: typeof import('./poller')['runLiveTick'];
   runVodTick: typeof import('./poller')['runVodTick'];
@@ -24,6 +26,7 @@ type Mod = {
 
 const m = {} as Mod;
 let channelId: number;
+let subjectId: number;
 
 beforeAll(async () => {
   const dbMod = await import('@/lib/db');
@@ -35,6 +38,8 @@ beforeAll(async () => {
   Object.assign(m, {
     db: dbMod.db,
     channels: schema.channels,
+    subjects: schema.subjects,
+    subjectChannels: schema.subjectChannels,
     programs: schema.programs,
     runLiveTick: poller.runLiveTick,
     runVodTick: poller.runVodTick,
@@ -55,6 +60,15 @@ beforeAll(async () => {
     .returning({ id: m.channels.id })
     .all();
   channelId = row.id;
+
+  // Only channels that feed a subject are polled, so the fixture needs one.
+  const [subject] = m.db
+    .insert(m.subjects)
+    .values({ name: 'Test Subject', position: 0 })
+    .returning({ id: m.subjects.id })
+    .all();
+  m.db.insert(m.subjectChannels).values({ subjectId: subject.id, channelId }).run();
+  subjectId = subject.id;
 });
 
 afterEach(() => vi.unstubAllGlobals());
@@ -162,7 +176,7 @@ describe('poller integration', () => {
   });
 
   it('leaves demo fixture channels out of polling entirely', async () => {
-    m.db
+    const [demo] = m.db
       .insert(m.channels)
       .values({
         platform: 'twitch',
@@ -171,7 +185,11 @@ describe('poller integration', () => {
         displayName: 'Demo',
         enabled: true,
       })
-      .run();
+      .returning({ id: m.channels.id })
+      .all();
+    // Given a subject, so it is excluded for being a fixture rather than for
+    // being on no row.
+    m.db.insert(m.subjectChannels).values({ subjectId, channelId: demo.id }).run();
 
     const { calls } = { calls: [] as string[] };
     vi.stubGlobal(

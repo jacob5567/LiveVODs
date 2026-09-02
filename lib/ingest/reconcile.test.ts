@@ -29,6 +29,7 @@ function program(overrides: Partial<ProgramRecord> = {}): ProgramRecord {
     canonicalUrl: 'https://twitch.tv/demo',
     thumbnailUrl: null,
     vodRef: null,
+    isUpload: false,
     ...overrides,
   };
 }

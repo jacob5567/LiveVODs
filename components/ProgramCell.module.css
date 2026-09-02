@@ -65,6 +65,18 @@
   text-overflow: ellipsis;
 }
 
+/* Library content: a repeat, filling a gap at a time it never aired. Reads
+   quieter than a real broadcast so appointments still stand out. */
+.rerun {
+  opacity: 0.72;
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--text-dim) 28%, transparent);
+}
+
+.rerun:hover {
+  opacity: 1;
+}
+
 .selected {
   outline: 2px solid var(--text);
   outline-offset: -1px;
