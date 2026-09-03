@@ -1,17 +1,23 @@
 :root {
   color-scheme: dark;
 
-  --bg: #0d0f14;
-  --surface: #161a23;
-  --surface-raised: #1e2430;
-  --border: #2a3140;
-  --text: #e6e9ef;
-  --text-dim: #97a0b3;
+  /* Broadcast — the deep navy of a scrolling cable guide, orange for what is
+     on now and cyan for what is coming. Live is the loudest colour on the
+     screen because it marks the one thing actually happening. */
+  --bg: #081130;
+  --surface: #0f1f47;
+  --surface-raised: #172c5e;
+  --border: #22407c;
+  --text: #e6edff;
+  --text-dim: #8ba4d6;
 
-  --live: #e0567a;
-  --scheduled: #4a6fd4;
-  --aired: #3a4356;
-  --missed: #262c38;
+  --live: #ff8a1f;
+  /* Text drawn on top of --live. White fails on a bright accent (orange gives
+     about 2.2:1), so this moves with the palette rather than being assumed. */
+  --on-live: #1a0d00;
+  --scheduled: #4fd1ff;
+  --aired: #152549;
+  --missed: #0d1a3b;
 }
 
 * {
