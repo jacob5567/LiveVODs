@@ -252,10 +252,12 @@ export function GuideGrid({
     if (!showing) return;
 
     // A live broadcast has no meaningful offset; you join it where it is.
+    // Otherwise seek past whatever the earlier parts already covered, plus how
+    // far into this one the row has got.
     const startSeconds =
       showing.isAppointment || at < showing.startsAt
         ? 0
-        : Math.floor((at - showing.startsAt) / 1000);
+        : Math.floor((showing.mediaOffsetMs + (at - showing.startsAt)) / 1000);
 
     setSelection({ slot: showing, startSeconds });
   }, []);

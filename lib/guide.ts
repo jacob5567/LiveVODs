@@ -42,6 +42,14 @@ export interface GuideSlot {
   isUpload: boolean;
   /** When it actually aired or was published, which a rerun no longer shows. */
   originalStartsAt: number;
+  /**
+   * Where in the source recording this slot begins. Non-zero for a later part
+   * of something too long to air in one sitting, and what playback seeks to.
+   */
+  mediaOffsetMs: number;
+  /** 1-based. Both are 1 for anything short enough to air whole. */
+  part: number;
+  partCount: number;
   canonicalUrl: string;
   platformRef: string;
   vodRef: string | null;
@@ -200,6 +208,9 @@ export function loadGuideWindow(from: Date, to: Date, now: Date = new Date()): G
 
       slots.push({
         key: `${placement.programId}:${placement.startsAt}:${index}`,
+        mediaOffsetMs: placement.offsetMs,
+        part: placement.part,
+        partCount: placement.partCount,
         programId: row.id,
         title: row.title,
         category: row.category,

@@ -56,7 +56,14 @@ export function ProgramCell({
   // the channel column no longer answers that.
   const meta = isMissed
     ? `${slot.channelName} · did not air`
-    : [slot.channelName, slot.category].filter(Boolean).join(' · ');
+    : [
+        slot.channelName,
+        // A marathon airs across several blocks, so a bar has to say which.
+        slot.partCount > 1 ? `Part ${slot.part} of ${slot.partCount}` : null,
+        slot.category,
+      ]
+        .filter(Boolean)
+        .join(' · ');
 
   return (
     /**

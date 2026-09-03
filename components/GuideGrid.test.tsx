@@ -57,6 +57,9 @@ function slot(programId: number, title: string, startsAt: number, endsAt: number
     isAppointment: false,
     isUpload: false,
     originalStartsAt: startsAt,
+    mediaOffsetMs: 0,
+    part: 1,
+    partCount: 1,
     canonicalUrl: 'https://twitch.tv/alice',
     vodRef: null,
     thumbnailUrl: null,
@@ -193,6 +196,35 @@ describe('GuideGrid', () => {
 
     expect(pane().getByText('Still Running')).toBeTruthy();
     expect(pane().queryByText('A Repeat')).toBeNull();
+  });
+
+  it('seeks past the parts already broadcast when tuning into a later one', () => {
+    // Part 3 of a marathon began four hours into the recording. Tuning in
+    // twenty minutes after that block started must land at 4h20m, not 20m.
+    const g = guide();
+    g.subjects[0].slots = [
+      {
+        ...slot(80, 'ESA Summer', NOW - 20 * MIN, NOW + 100 * MIN),
+        mediaOffsetMs: 4 * 60 * MIN,
+        part: 3,
+        partCount: 7,
+      },
+    ];
+
+    render(<GuideGrid guide={g} />);
+    fireEvent.click(row('Speedrunning'));
+
+    expect(pane().getByText(/Joined 260 min in/)).toBeTruthy();
+  });
+
+  it('names the part on a bar so a marathon is legible', () => {
+    const g = guide();
+    g.subjects[0].slots = [
+      { ...slot(81, 'ESA Summer', NOW, NOW + 120 * MIN), part: 3, partCount: 7 },
+    ];
+
+    const { container } = render(<GuideGrid guide={g} />);
+    expect(container.querySelector('[data-slot="k81"]')!.textContent).toContain('Part 3 of 7');
   });
 
   it('falls back to the nearest programme when the row has a gap now', () => {

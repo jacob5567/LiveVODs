@@ -151,9 +151,8 @@ describe('filling gaps', () => {
     }
   });
 
-  it('ignores items too short or too long to be programming', () => {
-    const placed = day(1, DAY, [], [item(1, 1), item(2, MAX_SLOT_MS / MIN + 60)]);
-    expect(fills(placed)).toEqual([]);
+  it('ignores an item too short to be programming', () => {
+    expect(fills(day(1, DAY, [], [item(1, 1)]))).toEqual([]);
   });
 
   it('produces only appointments when there is no library', () => {
@@ -164,6 +163,76 @@ describe('filling gaps', () => {
 
   it('produces nothing at all for an empty subject', () => {
     expect(day(1, DAY, [], [])).toEqual([]);
+  });
+});
+
+describe('splitting a long recording into parts', () => {
+  // A speedrunning marathon runs 14 hours. As one bar it would own most of a
+  // day; rejected, the content was lost entirely.
+  const MARATHON = item(1, 14 * 60);
+
+  it('broadcasts it in parts rather than dropping it', () => {
+    const placed = fills(day(1, DAY, [], [MARATHON]));
+    expect(placed.length).toBeGreaterThan(1);
+    expect(placed.every((p) => p.programId === 1)).toBe(true);
+  });
+
+  it('makes every part short enough to air', () => {
+    for (const p of fills(day(1, DAY, [], [MARATHON]))) {
+      expect(p.endsAt - p.startsAt).toBeLessThanOrEqual(MAX_SLOT_MS);
+    }
+  });
+
+  it('numbers the parts and says how many there are', () => {
+    const placed = fills(day(1, DAY, [], [MARATHON]));
+    expect(placed[0].part).toBe(1);
+    expect(placed[0].partCount).toBe(7);
+    expect(placed[1].part).toBe(2);
+  });
+
+  it('airs them in order and back to back', () => {
+    const placed = fills(day(1, DAY, [], [MARATHON])).slice(0, 4);
+    for (let i = 1; i < placed.length; i++) {
+      expect(placed[i].part).toBe(placed[i - 1].part + 1);
+      expect(placed[i].startsAt).toBe(placed[i - 1].endsAt);
+    }
+  });
+
+  it('gives each part the offset into the recording where it resumes', () => {
+    // Part 3 of a 14 hour marathon starts four hours in, so tuning in has to
+    // seek there rather than restarting the VOD.
+    const placed = fills(day(1, DAY, [], [MARATHON]));
+    for (const p of placed) {
+      expect(p.offsetMs).toBe((p.part - 1) * (14 * 60 * MIN) / p.partCount);
+    }
+  });
+
+  it('covers the whole recording with no overlap between parts', () => {
+    const placed = fills(day(1, DAY, [], [MARATHON])).slice(0, 7);
+    const total = placed.reduce((n, p) => n + (p.endsAt - p.startsAt), 0);
+
+    expect(total).toBe(14 * 60 * MIN);
+    for (let i = 1; i < placed.length; i++) {
+      expect(placed[i].offsetMs).toBe(placed[i - 1].offsetMs + (placed[i - 1].endsAt - placed[i - 1].startsAt));
+    }
+  });
+
+  it('leaves a recording short enough to air whole alone', () => {
+    const placed = fills(day(1, DAY, [], [item(1, 45)]));
+    expect(placed[0]).toMatchObject({ part: 1, partCount: 1, offsetMs: 0 });
+  });
+
+  it('keeps the parts of one recording together rather than dealing them out', () => {
+    // Shuffling happens per recording, not per part, so a marathon does not
+    // arrive as scattered fragments through the evening.
+    const placed = fills(day(1, DAY, [], [MARATHON, item(2, 40), item(3, 55)]));
+    const firstIdx = placed.findIndex((p) => p.programId === 1);
+    // The playlist cycles within a day, so the marathon airs more than once;
+    // what matters is that each showing runs straight through.
+    const run = placed.slice(firstIdx, firstIdx + 7);
+
+    expect(run.every((p) => p.programId === 1)).toBe(true);
+    expect(run.map((p) => p.part)).toEqual([1, 2, 3, 4, 5, 6, 7]);
   });
 });
 

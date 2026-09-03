@@ -42,6 +42,45 @@ export interface Placement {
   endsAt: number;
   /** False for library content, which is playing at a time it never aired. */
   isAppointment: boolean;
+  /** Where in the source recording this begins; non-zero only for a later part. */
+  offsetMs: number;
+  /** 1-based. Both are 1 for anything short enough to air whole. */
+  part: number;
+  partCount: number;
+}
+
+/** A library item as it will actually be broadcast: whole, or one part of it. */
+interface Playable {
+  programId: number;
+  durationMs: number;
+  offsetMs: number;
+  part: number;
+  partCount: number;
+}
+
+/**
+ * Splits anything too long to air in one sitting into equal consecutive parts.
+ * Equal rather than a run of full parts and a stub, so a 14 hour marathon
+ * becomes seven two-hour blocks instead of six plus twenty minutes.
+ */
+function toParts(item: LibraryItem): Playable[] {
+  if (item.durationMs <= MAX_SLOT_MS) {
+    return [
+      { programId: item.programId, durationMs: item.durationMs, offsetMs: 0, part: 1, partCount: 1 },
+    ];
+  }
+
+  const partCount = Math.ceil(item.durationMs / PART_TARGET_MS);
+  const each = Math.floor(item.durationMs / partCount);
+
+  return Array.from({ length: partCount }, (_, i) => ({
+    programId: item.programId,
+    // The last part carries the remainder, so the parts sum to the whole.
+    durationMs: i === partCount - 1 ? item.durationMs - each * (partCount - 1) : each,
+    offsetMs: each * i,
+    part: i + 1,
+    partCount,
+  }));
 }
 
 /**
@@ -68,8 +107,16 @@ export const MIN_SLOT_MS = 5 * 60_000;
  */
 export const CHAIN_LOOKBACK_DAYS = 2;
 
-/** Library items longer than this are skipped; nothing should own a whole day. */
+/** Beyond this a library item is broadcast in parts rather than as one block. */
 export const MAX_SLOT_MS = 6 * 60 * 60_000;
+
+/**
+ * Target length of a part. A speedrunning marathon VOD runs 14 hours or more;
+ * as one bar it would own most of a day, and rejecting it lost the content
+ * entirely. Split, it behaves the way a marathon actually aired — consecutive
+ * blocks, each resuming where the last left off.
+ */
+export const PART_TARGET_MS = 2 * 60 * 60_000;
 
 /**
  * mulberry32 — small, fast, and good enough to shuffle a playlist. Seeded from
@@ -113,17 +160,20 @@ function shuffled<T>(items: T[], random: () => number): T[] {
  */
 function itemAt(
   subjectId: number,
-  playlist: LibraryItem[],
+  groups: Playable[][],
+  length: number,
   index: number,
-  cache: Map<number, LibraryItem[]>,
-): LibraryItem {
-  const cycle = Math.floor(index / playlist.length);
+  cache: Map<number, Playable[]>,
+): Playable {
+  const cycle = Math.floor(index / length);
   let order = cache.get(cycle);
   if (!order) {
-    order = shuffled(playlist, seededRandom(hashSeed(`${subjectId}:cycle:${cycle}`)));
+    // Shuffled by recording, then flattened — so the parts of one marathon stay
+    // together and in order rather than being dealt out across the evening.
+    order = shuffled(groups, seededRandom(hashSeed(`${subjectId}:cycle:${cycle}`))).flat();
     cache.set(cycle, order);
   }
-  return order[index % playlist.length];
+  return order[index % length];
 }
 
 /** Local-midnight boundaries of the day containing `ms`. */
@@ -170,7 +220,7 @@ export function programmeDay(
   appointments: Appointment[],
   library: LibraryItem[],
   chain: Chain = { cursorMs: 0, index: 0 },
-  cache: Map<number, LibraryItem[]> = new Map(),
+  cache: Map<number, Playable[]> = new Map(),
 ): { placements: Placement[]; chain: Chain } {
   const { start, end } = dayBounds(dayStartMs);
 
@@ -183,18 +233,24 @@ export function programmeDay(
     startsAt: a.startsAt,
     endsAt: a.endsAt,
     isAppointment: true,
+    offsetMs: 0,
+    part: 1,
+    partCount: 1,
   }));
 
-  const usable = library.filter(
-    (item) => item.durationMs >= MIN_SLOT_MS && item.durationMs <= MAX_SLOT_MS,
-  );
+  // Nothing is rejected for being long any more; it is broadcast in parts.
+  const groups = library
+    .filter((item) => item.durationMs >= MIN_SLOT_MS)
+    .map(toParts)
+    .filter((parts) => parts.every((p) => p.durationMs >= MIN_SLOT_MS));
+  const playlistLength = groups.reduce((n, g) => n + g.length, 0);
 
   // Programming resumes wherever the previous day reached, which may be inside
   // this one if a programme ran over.
   let cursor = Math.max(start, chain.cursorMs);
   let index = chain.index;
 
-  if (usable.length === 0) {
+  if (playlistLength === 0) {
     return {
       placements: placements.sort((a, b) => a.startsAt - b.startsAt),
       chain: { cursorMs: cursor, index },
@@ -225,8 +281,8 @@ export function programmeDay(
     let at = gapStart;
     let skipped = 0;
 
-    while (gapEnd - at >= MIN_SLOT_MS && skipped < usable.length) {
-      const item = itemAt(subjectId, usable, index, cache);
+    while (gapEnd - at >= MIN_SLOT_MS && skipped < playlistLength) {
+      const item = itemAt(subjectId, groups, playlistLength, index, cache);
       index += 1;
 
       if (at + item.durationMs > ceiling) {
@@ -241,6 +297,9 @@ export function programmeDay(
         startsAt: at,
         endsAt: at + item.durationMs,
         isAppointment: false,
+        offsetMs: item.offsetMs,
+        part: item.part,
+        partCount: item.partCount,
       });
       at += item.durationMs;
       skipped = 0;
@@ -272,7 +331,7 @@ export function programmeWindow(
   library: LibraryItem[],
 ): Placement[] {
   const out: Placement[] = [];
-  const cache = new Map<number, LibraryItem[]>();
+  const cache = new Map<number, Playable[]>();
   // An appointment spanning midnight belongs to both days; it is placed once.
   const placedAppointments = new Set<number>();
 

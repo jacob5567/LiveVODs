@@ -30,6 +30,9 @@ function runtime(ms: number): string {
 
 function label(slot: GuideSlot): { text: string; live: boolean } {
   if (slot.state === 'missed') return { text: 'DID NOT AIR', live: false };
+  // A marathon airs in blocks, and which block you are looking at matters more
+  // than that it is a repeat.
+  if (slot.partCount > 1) return { text: `PART ${slot.part} OF ${slot.partCount}`, live: false };
   if (!slot.isAppointment) return { text: slot.isUpload ? 'REPLAY' : 'REPEAT', live: false };
   if (slot.state === 'live') return { text: 'LIVE', live: true };
   return { text: 'UPCOMING', live: false };
