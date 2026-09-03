@@ -311,6 +311,25 @@ describe('GuideGrid', () => {
     expect(preview.textContent).toMatch(/Published .*2026/);
   });
 
+  it('collapses the image area when a thumbnail fails to load', () => {
+    const g = guide();
+    g.subjects[0].slots = [
+      { ...slot(70, 'Gone', NOW, NOW + 30 * MIN), thumbnailUrl: 'https://cdn/missing.jpg' },
+    ];
+
+    const { container } = render(<GuideGrid guide={g} />);
+    fireEvent.mouseOver(container.querySelector('[data-slot="k70"]')!);
+
+    const img = container.querySelector('[class*="thumb"]') as HTMLImageElement;
+    expect(img).toBeTruthy();
+
+    // A blank 16:9 block is worse than none, so the space goes.
+    fireEvent.error(img);
+    expect(container.querySelector('[class*="thumb"]')).toBeNull();
+    // The rest of the card is unaffected.
+    expect(container.querySelector('[class*="card"]')!.textContent).toContain('Gone');
+  });
+
   it('explains how to populate an empty lineup', () => {
     render(<GuideGrid guide={{ from: NOW, to: NOW + 1000, subjects: [] }} />);
     expect(screen.getByText(/No subjects in the lineup yet/i)).toBeTruthy();

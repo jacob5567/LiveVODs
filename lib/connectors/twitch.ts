@@ -81,13 +81,18 @@ export class TwitchApiError extends Error {
 }
 
 /**
- * Twitch thumbnail URLs are templates containing {width}x{height}.
- * Left unsubstituted they 404.
+ * Twitch templates the size into its thumbnail URLs, but not consistently:
+ * live streams use {width}x{height} and VODs use %{width}x%{height}.
+ *
+ * Substituting the bare form first is a trap — it matches inside the percent
+ * form and leaves a stray %, giving thumb0-%440x%248.jpg, which 404s. One
+ * pattern covering both avoids that.
  */
-function sizeThumbnail(url: string | null | undefined, w = 440, h = 248): string | null {
+export function sizeThumbnail(url: string | null | undefined, w = 440, h = 248): string | null {
   if (!url) return null;
-  return url.replace('{width}', String(w)).replace('%{width}', String(w))
-    .replace('{height}', String(h)).replace('%{height}', String(h));
+  // A VOD still being transcoded has a placeholder instead of a real frame.
+  if (url.includes('404_processing')) return null;
+  return url.replace(/%?\{width\}/g, String(w)).replace(/%?\{height\}/g, String(h));
 }
 
 /** Twitch reports VOD length as "3h20m15s" / "20m15s" / "15s". */

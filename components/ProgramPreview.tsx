@@ -44,6 +44,16 @@ function label(slot: GuideSlot): { text: string; live: boolean } {
  * could not show the thumbnail the database already holds.
  */
 export function ProgramPreview({ slot, anchor }: { slot: GuideSlot; anchor: DOMRect }) {
+  /**
+   * A thumbnail can still fail — a deleted VOD, an expired link — and a blank
+   * 16:9 block is worse than no block, so the space collapses rather than
+   * sitting empty. Reset per programme, since the card is reused as the
+   * pointer moves rather than remounted (which would replay its animation on
+   * every bar).
+   */
+  const [imageFailed, setImageFailed] = useState(false);
+  useEffect(() => setImageFailed(false), [slot.thumbnailUrl]);
+
   // Rendered off-screen for one frame would flash; instead the position is
   // computed immediately and only clamped against the viewport.
   const [viewport, setViewport] = useState(() => ({
@@ -80,9 +90,15 @@ export function ProgramPreview({ slot, anchor }: { slot: GuideSlot; anchor: DOMR
       style={{ left, top, transform: above ? 'translateY(-100%)' : undefined }}
       role="presentation"
     >
-      {slot.thumbnailUrl && (
+      {slot.thumbnailUrl && !imageFailed && (
         // eslint-disable-next-line @next/next/no-img-element
-        <img className={styles.thumb} src={slot.thumbnailUrl} alt="" loading="lazy" />
+        <img
+          className={styles.thumb}
+          src={slot.thumbnailUrl}
+          alt=""
+          loading="lazy"
+          onError={() => setImageFailed(true)}
+        />
       )}
 
       <div className={styles.body}>

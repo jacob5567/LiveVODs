@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { TwitchConnector, parseTwitchDuration } from './twitch';
+import { TwitchConnector, parseTwitchDuration, sizeThumbnail } from './twitch';
 import type { ChannelRef } from './types';
 import type { LiveObservation, ScheduledObservation, VodObservation } from '@/lib/ingest/reconcile';
 
@@ -40,6 +40,40 @@ const channel = (id: number, platformChannelId: string, login: string): ChannelR
 const connector = () => new TwitchConnector('client-id', 'client-secret');
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe('sizeThumbnail', () => {
+  it('substitutes the plain template a live stream uses', () => {
+    expect(sizeThumbnail('https://cdn/a-{width}x{height}.jpg')).toBe('https://cdn/a-440x248.jpg');
+  });
+
+  it('substitutes the percent template a VOD uses', () => {
+    // The bug this covers: replacing {width} first matched inside %{width} and
+    // left thumb0-%440x%248.jpg behind, which Twitch answers with a 404.
+    expect(sizeThumbnail('https://cdn/thumb0-%{width}x%{height}.jpg')).toBe(
+      'https://cdn/thumb0-440x248.jpg',
+    );
+  });
+
+  it('leaves no brace or stray percent behind either way', () => {
+    for (const template of [
+      'https://cdn/a-{width}x{height}.jpg',
+      'https://cdn/thumb0-%{width}x%{height}.jpg',
+    ]) {
+      expect(sizeThumbnail(template)).not.toMatch(/[{}]|%\d/);
+    }
+  });
+
+  it('treats a VOD still being transcoded as having no thumbnail', () => {
+    expect(
+      sizeThumbnail('https://vod-secure.twitch.tv/_404/404_processing_%{width}x%{height}.png'),
+    ).toBeNull();
+  });
+
+  it('passes through a missing url', () => {
+    expect(sizeThumbnail(null)).toBeNull();
+    expect(sizeThumbnail('')).toBeNull();
+  });
+});
 
 describe('parseTwitchDuration', () => {
   it.each([
