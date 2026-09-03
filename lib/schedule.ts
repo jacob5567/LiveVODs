@@ -62,6 +62,14 @@ interface Playable {
  * Splits anything too long to air in one sitting into equal consecutive parts.
  * Equal rather than a run of full parts and a stub, so a 14 hour marathon
  * becomes seven two-hour blocks instead of six plus twenty minutes.
+ *
+ * Splitting on real chapter boundaries would be better, and was investigated.
+ * It is not available: Twitch's Helix VOD payload carries no chapter data at
+ * all, and /helix/streams/markers needs a user token for a channel you own,
+ * which an app with no login cannot have. YouTube chapters can be parsed from
+ * a description, but on a real lineup none of the videos long enough to split
+ * carried any — the long ones are raw stream re-uploads, which nobody
+ * chapters. So parts land on the clock, and may fall mid-run.
  */
 function toParts(item: LibraryItem): Playable[] {
   if (item.durationMs <= MAX_SLOT_MS) {
