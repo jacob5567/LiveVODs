@@ -9,6 +9,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { eq as eqId } from 'drizzle-orm';
 
 // Must be set before lib/db is imported: it resolves the path at module load.
 process.env.DATABASE_PATH = join(mkdtempSync(join(tmpdir(), 'livevods-')), 'test.db');
@@ -173,6 +174,56 @@ describe('poller integration', () => {
     expect(rows[0].vodRef).toBe('video-9');
     expect(rows[0].endsAt.getTime() - rows[0].startsAt.getTime()).toBe(63 * 60_000);
     expect(rows[0].endsAtProvisional).toBe(false);
+  });
+
+  it('refreshes only a slice of the lineup per discovery pass', async () => {
+    // Discovery costs quota per channel, so sweeping everything every pass makes
+    // the daily spend grow with the lineup until ingest simply stops.
+    const { runScheduleTick } = await import('./poller');
+    const extra = m.db
+      .insert(m.channels)
+      .values(
+        Array.from({ length: 40 }, (_, i) => ({
+          platform: 'twitch' as const,
+          platformChannelId: `bulk-${i}`,
+          login: `bulk${i}`,
+          displayName: `Bulk ${i}`,
+          enabled: true,
+        })),
+      )
+      .returning({ id: m.channels.id })
+      .all();
+    for (const c of extra) {
+      m.db.insert(m.subjectChannels).values({ subjectId, channelId: c.id }).run();
+    }
+
+    const calls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL) => {
+        const url = String(input);
+        calls.push(url);
+        if (url.includes('oauth2/token')) {
+          return new Response(JSON.stringify({ access_token: 't', expires_in: 3600 }), {
+            status: 200,
+          });
+        }
+        return new Response(JSON.stringify({ data: { segments: [], vacation: null } }), {
+          status: 200,
+        });
+      }),
+    );
+
+    await runScheduleTick(connector());
+
+    // 41 channels on a row, but one pass touches only the batch.
+    const scheduleCalls = calls.filter((c) => c.includes('/schedule?'));
+    expect(scheduleCalls.length).toBeGreaterThan(0);
+    expect(scheduleCalls.length).toBeLessThanOrEqual(30);
+
+    for (const c of extra) {
+      m.db.delete(m.channels).where(eqId(m.channels.id, c.id)).run();
+    }
   });
 
   it('leaves demo fixture channels out of polling entirely', async () => {

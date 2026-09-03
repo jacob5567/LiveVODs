@@ -23,6 +23,18 @@ export const VOD_INTERVAL_MS = 60 * 60 * 1000;
 /** Spacing between per-channel requests, so a big lineup does not burst. */
 const REQUEST_SPACING_MS = 120;
 
+/**
+ * Channels refreshed per discovery pass.
+ *
+ * Discovery costs two quota units per channel, so sweeping the whole lineup
+ * every pass makes the daily spend proportional to how many channels there
+ * are — at 131 channels that projected 25,000 units against a 9,500 budget,
+ * and ingest would simply stop until the quota reset. Refreshing a rotating
+ * slice keeps the cost per pass flat however far the lineup grows; a channel
+ * comes round roughly hourly, which is ample for noticing a new upload.
+ */
+const DISCOVERY_BATCH = 30;
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function enabledChannels(platform: Platform): ChannelRef[] {
@@ -45,6 +57,26 @@ function enabledChannels(platform: Platform): ChannelRef[] {
 
   const watchRefs = loadWatchRefs(rows.map((r) => r.id));
   return rows.map((r) => ({ ...r, watchRefs: watchRefs.get(r.id) ?? [] }));
+}
+
+/** Orders by when each channel was last refreshed, oldest first. */
+function leastRecentlySynced(
+  channels: ChannelRef[],
+  field: 'schedule' | 'vod',
+  limit: number,
+): ChannelRef[] {
+  const column = field === 'schedule' ? 'lastScheduleSyncAt' : 'lastVodSyncAt';
+  const seen = new Map(
+    db
+      .select()
+      .from(channelSyncState)
+      .all()
+      .map((r) => [r.channelId, r[column]?.getTime() ?? 0]),
+  );
+
+  return [...channels]
+    .sort((a, b) => (seen.get(a.id) ?? 0) - (seen.get(b.id) ?? 0))
+    .slice(0, limit);
 }
 
 function commit(observations: Observation[], channelIds: number[], now: Date) {
@@ -97,9 +129,14 @@ async function runPerChannel(
   connector: Connector,
   field: 'schedule' | 'vod',
   fetch: (c: ChannelRef) => Promise<Observation[]>,
+  batchSize?: number,
 ): Promise<void> {
-  const targets = enabledChannels(connector.platform);
-  if (targets.length === 0) return;
+  const all = enabledChannels(connector.platform);
+  if (all.length === 0) return;
+
+  // Least recently refreshed first, so every channel comes round in turn
+  // rather than the same few being swept repeatedly.
+  const targets = batchSize ? leastRecentlySynced(all, field, batchSize) : all;
 
   let inserted = 0;
   let updated = 0;
@@ -132,7 +169,7 @@ async function runPerChannel(
 }
 
 export const runScheduleTick = (c: Connector) =>
-  runPerChannel(c, 'schedule', (ch) => c.fetchSchedule(ch));
+  runPerChannel(c, 'schedule', (ch) => c.fetchSchedule(ch), DISCOVERY_BATCH);
 
 export const runVodTick = (c: Connector) => runPerChannel(c, 'vod', (ch) => c.fetchRecentVods(ch));
 
