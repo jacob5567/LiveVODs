@@ -1,28 +1,33 @@
 'use client';
 
 import type { GuideSlot } from '@/lib/guide';
-import { PX_PER_MINUTE, MINUTE_MS } from '@/lib/time';
+import { MINUTE_MS } from '@/lib/time';
+import type { GridMetrics } from '@/lib/metrics';
 import styles from './ProgramCell.module.css';
 
-/** Below this a bar has no room for a title, so it shows nothing but its colour. */
+/**
+ * Below this a bar has no room for a title, so it shows nothing but its colour.
+ * Scaled with the interface, since the type inside it scales too.
+ */
 const MIN_LABEL_PX = 54;
 
 /** Horizontal padding inside a bar, kept in sync with .cell in the stylesheet. */
 const CELL_PADDING_PX = 18;
 
-const px = (ms: number) => (ms / MINUTE_MS) * PX_PER_MINUTE;
-
 export function ProgramCell({
   slot,
   viewportStart,
   viewportEnd,
+  metrics,
   selected = false,
 }: {
   slot: GuideSlot;
   viewportStart: number;
   viewportEnd: number;
+  metrics: GridMetrics;
   selected?: boolean;
 }) {
+  const px = (ms: number) => (ms / MINUTE_MS) * metrics.pxPerMinute;
   // A programme that began before the window (or runs past it) is clipped to the
   // window rather than positioned off-screen — otherwise its label sits at a
   // negative offset and the bar renders blank.
@@ -35,7 +40,7 @@ export function ProgramCell({
 
   const isLive = slot.state === 'live' && slot.isAppointment;
   const isMissed = slot.state === 'missed';
-  const roomForLabel = width >= MIN_LABEL_PX;
+  const roomForLabel = width >= MIN_LABEL_PX * metrics.uiScale;
 
   const classes = [styles.cell, styles[slot.state]];
   if (isLive && slot.endsAtProvisional) classes.push(styles.ongoing);
@@ -77,7 +82,7 @@ export function ProgramCell({
           className={styles.label}
           style={
             {
-              maxWidth: Math.max(0, width - CELL_PADDING_PX),
+              maxWidth: Math.max(0, width - CELL_PADDING_PX * metrics.uiScale),
               '--bar-left': `${left}px`,
               '--bar-width': `${width}px`,
             } as React.CSSProperties

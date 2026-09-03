@@ -2,6 +2,40 @@
   display: flex;
   flex-direction: column;
   height: 100vh;
+
+  /**
+   * Every dimension the grid is built from. CSS owns them rather than JS so
+   * the server renders one size-agnostic markup and the breakpoints do the
+   * rest; the few places that need pixels read these back.
+   *
+   * --ppm is pixels per minute of programming, and is what actually decides
+   * how much of an evening fits on screen.
+   */
+  --ppm: 4;
+  --channel-col: 200px;
+  /**
+   * Capped against viewport height as well as width: a wide but short display
+   * would otherwise push rows off the bottom, and a guide you have to scroll
+   * vertically to read is a worse guide.
+   */
+  --row-h: min(64px, 9.5vh);
+  --ui-scale: 1;
+}
+
+@media (min-width: 1280px) {
+  .wrap { --ppm: 4.5; --channel-col: 224px; --row-h: min(70px, 9.5vh); --ui-scale: 1.06; }
+}
+
+@media (min-width: 1600px) {
+  .wrap { --ppm: 5; --channel-col: 248px; --row-h: min(78px, 9.5vh); --ui-scale: 1.14; }
+}
+
+@media (min-width: 1920px) {
+  .wrap { --ppm: 6; --channel-col: 284px; --row-h: min(90px, 9.5vh); --ui-scale: 1.26; }
+}
+
+@media (min-width: 2560px) {
+  .wrap { --ppm: 7.5; --channel-col: 340px; --row-h: min(108px, 9.5vh); --ui-scale: 1.48; }
 }
 
 .toolbar {
@@ -25,6 +59,7 @@
 }
 
 .button {
+  font-size: calc(13px * var(--ui-scale));
   background: var(--surface-raised);
   color: var(--text);
   border: 1px solid var(--border);
@@ -50,12 +85,20 @@
   min-height: 0;
 }
 
+/**
+ * width:max-content is load-bearing. A flex container in a scroll box is only
+ * as wide as the scrollport and sits at content-x 0, so past the first
+ * screenful its background and border simply stopped — the ruler ran out of
+ * colour halfway across once the guide was scrolled.
+ */
 .ruler {
   position: sticky;
   top: 0;
   z-index: 3;
   display: flex;
-  height: 44px;
+  width: max-content;
+  min-width: 100%;
+  height: calc(44px * var(--ui-scale));
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
@@ -65,6 +108,7 @@
   left: 0;
   z-index: 4;
   flex: none;
+  width: var(--channel-col);
   background: var(--surface);
   border-right: 1px solid var(--border);
 }
@@ -80,8 +124,8 @@
   top: 0;
   bottom: 0;
   border-left: 1px solid var(--border);
-  padding-left: 6px;
-  font-size: 12px;
+  padding-left: calc(6px * var(--ui-scale));
+  font-size: calc(12px * var(--ui-scale));
   color: var(--text-dim);
   display: flex;
   align-items: center;
@@ -95,6 +139,8 @@
 
 .rows {
   position: relative;
+  width: max-content;
+  min-width: 100%;
   /* Fills the scrollport when there are fewer channels than fit, so the
      now-line runs the full height instead of stopping at the last row and
      leaving the space below looking like a rendering fault. */
@@ -103,6 +149,9 @@
 
 .row {
   display: flex;
+  width: max-content;
+  min-width: 100%;
+  height: var(--row-h);
   border-bottom: 1px solid var(--border);
   /* The row is the control now, so the affordances live here rather than on
      the individual listings. */
@@ -128,6 +177,7 @@
   left: 0;
   z-index: 2;
   flex: none;
+  width: var(--channel-col);
   display: flex;
   align-items: center;
   gap: 0.6rem;
@@ -138,8 +188,8 @@
 }
 
 .avatar {
-  width: 32px;
-  height: 32px;
+  width: calc(32px * var(--ui-scale));
+  height: calc(32px * var(--ui-scale));
   border-radius: 50%;
   flex: none;
   background: var(--surface-raised);
@@ -152,14 +202,14 @@
 
 .channelName {
   font-weight: 600;
-  font-size: 13px;
+  font-size: calc(13.5px * var(--ui-scale));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .platform {
-  font-size: 11px;
+  font-size: calc(11.5px * var(--ui-scale));
   color: var(--text-dim);
   text-transform: lowercase;
 }
@@ -182,12 +232,12 @@
 }
 
 .nowLabel {
+  font-size: calc(11px * var(--ui-scale));
   position: absolute;
   top: 0;
   transform: translateX(-50%);
   background: var(--live);
   color: var(--on-live);
-  font-size: 11px;
   font-weight: 600;
   padding: 1px 6px;
   border-radius: 0 0 4px 4px;

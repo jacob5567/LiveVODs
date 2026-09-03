@@ -2,30 +2,23 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Guide, GuideSlot, GuideSubject } from '@/lib/guide';
-import { MINUTE_MS, PX_PER_MINUTE } from '@/lib/time';
+import { MINUTE_MS } from '@/lib/time';
+import { BASE_METRICS, readMetrics, sameMetrics } from '@/lib/metrics';
 import { ProgramCell } from './ProgramCell';
 import { PlayerPane, type Selection } from './PlayerPane';
 import { ProgramPreview } from './ProgramPreview';
 import { useLiveGuide } from './useLiveGuide';
 import styles from './GuideGrid.module.css';
 
-const CHANNEL_COL_W = 210;
-const ROW_H = 62;
 const TICK_MS = 30 * MINUTE_MS;
-
-/** Context kept to the left of the now-line when jumping to it. */
-const LEAD_IN_PX = 60 * PX_PER_MINUTE;
 
 /** Keep the now-line honest without re-rendering constantly. */
 const CLOCK_INTERVAL_MS = 30_000;
 
-/**
- * Exposed to CSS so a program bar's sticky label knows to stop clear of the
- * channel column rather than sliding underneath it.
- */
-const CSS_VARS = { '--channel-col': `${CHANNEL_COL_W}px` } as React.CSSProperties;
+/** Context kept to the left of the now-line when jumping to it, in minutes. */
+const LEAD_IN_MIN = 60;
 
-const xFor = (ms: number, from: number) => ((ms - from) / MINUTE_MS) * PX_PER_MINUTE;
+const minutesFrom = (ms: number, from: number) => (ms - from) / MINUTE_MS;
 
 function formatHour(ms: number): string {
   const d = new Date(ms);
@@ -50,6 +43,32 @@ export function GuideGrid({
   const [hover, setHover] = useState<{ slot: GuideSlot; anchor: DOMRect } | null>(null);
 
   /**
+   * Starts at the base scale so the first client render matches the server's,
+   * then picks up whichever breakpoint is really in force. Reading it rather
+   * than deriving it from window.innerWidth keeps CSS the single definition.
+   */
+  const [metrics, setMetrics] = useState(BASE_METRICS);
+  const wrap = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const sync = () => {
+      const node = wrap.current;
+      if (!node) return;
+      const next = readMetrics(node);
+      setMetrics((prev) => (sameMetrics(prev, next) ? prev : next));
+    };
+
+    sync();
+    window.addEventListener('resize', sync);
+    return () => window.removeEventListener('resize', sync);
+  }, []);
+
+  const xFor = useCallback(
+    (ms: number, from: number) => minutesFrom(ms, from) * metrics.pxPerMinute,
+    [metrics.pxPerMinute],
+  );
+
+  /**
    * The selection holds a slot captured at click time. Re-resolving it against
    * the current guide keeps the open player honest — a broadcast that ends
    * while being watched stops claiming to be live.
@@ -71,8 +90,8 @@ export function GuideGrid({
   }, []);
 
   const totalWidth = useMemo(
-    () => ((guide.to - guide.from) / MINUTE_MS) * PX_PER_MINUTE,
-    [guide.from, guide.to],
+    () => minutesFrom(guide.to, guide.from) * metrics.pxPerMinute,
+    [guide.from, guide.to, metrics.pxPerMinute],
   );
 
   const ticks = useMemo(() => {
@@ -87,8 +106,8 @@ export function GuideGrid({
 
   const offsetForNow = useCallback(
     // Leave an hour of context to the left rather than pinning now to the edge.
-    () => Math.max(0, xFor(Date.now(), guide.from) - LEAD_IN_PX),
-    [guide.from],
+    () => Math.max(0, xFor(Date.now(), guide.from) - LEAD_IN_MIN * metrics.pxPerMinute),
+    [guide.from, xFor, metrics.pxPerMinute],
   );
 
   const scrollToNow = useCallback(() => {
@@ -203,7 +222,10 @@ export function GuideGrid({
   );
 
   const nudge = (hours: number) =>
-    scroller.current?.scrollBy({ left: hours * 60 * PX_PER_MINUTE, behavior: 'smooth' });
+    scroller.current?.scrollBy({
+      left: hours * 60 * metrics.pxPerMinute,
+      behavior: 'smooth',
+    });
 
   /**
    * Tuning in to a row, the way changing channel on a television does: whatever
@@ -279,7 +301,7 @@ export function GuideGrid({
 
   if (guide.subjects.length === 0) {
     return (
-      <div className={styles.wrap} style={CSS_VARS}>
+      <div className={styles.wrap} ref={wrap}>
         <Toolbar liveCount={0} onNow={scrollToNow} onNudge={nudge} />
         <div className={styles.empty}>
           <p>No subjects in the lineup yet.</p>
@@ -297,7 +319,7 @@ export function GuideGrid({
   const nowVisible = now >= guide.from && now <= guide.to;
 
   return (
-    <div className={styles.wrap} style={CSS_VARS}>
+    <div className={styles.wrap} ref={wrap}>
       <Toolbar liveCount={liveCount} onNow={scrollToNow} onNudge={nudge} />
 
       {currentSelection && (
@@ -310,7 +332,7 @@ export function GuideGrid({
 
       <div className={styles.scroller} ref={attachScroller} onScroll={publishScroll}>
         <div className={styles.ruler}>
-          <div className={styles.corner} style={{ width: CHANNEL_COL_W }} />
+          <div className={styles.corner} />
           <div className={styles.ticks} style={{ width: totalWidth }}>
             {ticks.map((tick) => (
               <div
@@ -338,7 +360,6 @@ export function GuideGrid({
             <div
               key={subject.id}
               className={styles.row}
-              style={{ height: ROW_H }}
               // The whole row is the target: you tune to a channel, not to a
               // listing. Bars below are presentation only.
               role="button"
@@ -352,7 +373,7 @@ export function GuideGrid({
                 tuneIn(subject);
               }}
             >
-              <div className={styles.channel} style={{ width: CHANNEL_COL_W }}>
+              <div className={styles.channel}>
                 <div className={styles.channelText}>
                   <div className={styles.channelName}>{subject.name}</div>
                   <div className={styles.platform}>
@@ -372,6 +393,7 @@ export function GuideGrid({
                     slot={slot}
                     viewportStart={guide.from}
                     viewportEnd={guide.to}
+                    metrics={metrics}
                     selected={selection?.slot.key === slot.key}
                   />
                 ))}
@@ -380,7 +402,10 @@ export function GuideGrid({
           ))}
 
           {nowVisible && (
-            <div className={styles.nowLine} style={{ left: CHANNEL_COL_W + nowX }}>
+            <div
+              className={styles.nowLine}
+              style={{ left: `calc(var(--channel-col) + ${nowX}px)` }}
+            >
               <div className={styles.nowLabel}>
                 {new Date(now).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
               </div>

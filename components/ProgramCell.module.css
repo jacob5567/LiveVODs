@@ -3,7 +3,7 @@
   top: 3px;
   bottom: 3px;
   border-radius: 5px;
-  padding: 5px 9px;
+  padding: calc(5px * var(--ui-scale)) calc(9px * var(--ui-scale));
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -48,7 +48,7 @@
 
 
 .title {
-  font-size: 13px;
+  font-size: calc(13.5px * var(--ui-scale));
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -56,7 +56,7 @@
 }
 
 .meta {
-  font-size: 11px;
+  font-size: calc(11.5px * var(--ui-scale));
   color: color-mix(in srgb, var(--text) 65%, transparent);
   white-space: nowrap;
   overflow: hidden;
@@ -133,10 +133,10 @@
 }
 
 .badge {
+  font-size: calc(10px * var(--ui-scale));
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.06em;
   color: #fff;
