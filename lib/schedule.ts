@@ -44,8 +44,29 @@ export interface Placement {
   isAppointment: boolean;
 }
 
+/**
+ * Carried from one day to the next, which is what removes the seam at midnight.
+ *
+ * Without it every day restarted at 00:00 with a freshly shuffled order, so the
+ * last programme of a day had to end exactly on the boundary — and it never
+ * could, leaving dead air, while the reshuffle let a programme close one day
+ * and open the next.
+ */
+export interface Chain {
+  /** Where programming has reached. Past midnight when a programme runs over. */
+  cursorMs: number;
+  /** Position in the endless running order. */
+  index: number;
+}
+
 /** Gaps shorter than this are left empty rather than filled with a sliver. */
 export const MIN_SLOT_MS = 5 * 60_000;
+
+/**
+ * Days programmed before the window, so the boundaries inside it are already
+ * chained. The window spans at most two midnights, so two days is enough.
+ */
+export const CHAIN_LOOKBACK_DAYS = 2;
 
 /** Library items longer than this are skipped; nothing should own a whole day. */
 export const MAX_SLOT_MS = 6 * 60 * 60_000;
@@ -84,6 +105,27 @@ function shuffled<T>(items: T[], random: () => number): T[] {
   return out;
 }
 
+/**
+ * The endless running order: the library shuffled, then reshuffled each time it
+ * is exhausted, so a row does not replay in the same sequence forever. Seeded
+ * from the subject and the cycle number, never from the date — the order has to
+ * continue across midnight rather than restart there.
+ */
+function itemAt(
+  subjectId: number,
+  playlist: LibraryItem[],
+  index: number,
+  cache: Map<number, LibraryItem[]>,
+): LibraryItem {
+  const cycle = Math.floor(index / playlist.length);
+  let order = cache.get(cycle);
+  if (!order) {
+    order = shuffled(playlist, seededRandom(hashSeed(`${subjectId}:cycle:${cycle}`)));
+    cache.set(cycle, order);
+  }
+  return order[index % playlist.length];
+}
+
 /** Local-midnight boundaries of the day containing `ms`. */
 export function dayBounds(ms: number): { start: number; end: number } {
   const start = new Date(ms);
@@ -91,12 +133,6 @@ export function dayBounds(ms: number): { start: number; end: number } {
   const end = new Date(start);
   end.setDate(end.getDate() + 1);
   return { start: start.getTime(), end: end.getTime() };
-}
-
-/** Stable key for seeding: the local date, not a UTC one. */
-function dayKey(ms: number): string {
-  const d = new Date(ms);
-  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
 }
 
 /**
@@ -120,18 +156,22 @@ function resolveOverlaps(appointments: Appointment[]): Appointment[] {
 }
 
 /**
- * Programmes one day of one row.
+ * Programmes one day of one row, continuing from where the previous day left
+ * off and handing on where this one reaches.
  *
- * `subjectId` and the day together seed the shuffle, so two subjects sharing a
- * channel do not play the same video at the same moment, and a given row's
- * Tuesday looks different from its Wednesday.
+ * The final programme of a day is allowed to run through midnight — that is the
+ * whole point. Ending every day exactly on the boundary is impossible unless
+ * the library happens to contain something the exact length of the remainder,
+ * so the boundary was costing every row a stretch of dead air.
  */
 export function programmeDay(
   subjectId: number,
   dayStartMs: number,
   appointments: Appointment[],
   library: LibraryItem[],
-): Placement[] {
+  chain: Chain = { cursorMs: 0, index: 0 },
+  cache: Map<number, LibraryItem[]> = new Map(),
+): { placements: Placement[]; chain: Chain } {
   const { start, end } = dayBounds(dayStartMs);
 
   const fixed = resolveOverlaps(
@@ -149,35 +189,49 @@ export function programmeDay(
     (item) => item.durationMs >= MIN_SLOT_MS && item.durationMs <= MAX_SLOT_MS,
   );
 
-  if (usable.length === 0) return placements.sort((a, b) => a.startsAt - b.startsAt);
+  // Programming resumes wherever the previous day reached, which may be inside
+  // this one if a programme ran over.
+  let cursor = Math.max(start, chain.cursorMs);
+  let index = chain.index;
 
-  const random = seededRandom(hashSeed(`${subjectId}:${dayKey(dayStartMs)}`));
-  const playlist = shuffled(usable, random);
-
-  // A single cursor walked across the whole day, so the running order carries
-  // through the gaps instead of restarting after every appointment — and no
-  // item repeats until the library has been exhausted.
-  let next = 0;
+  if (usable.length === 0) {
+    return {
+      placements: placements.sort((a, b) => a.startsAt - b.startsAt),
+      chain: { cursorMs: cursor, index },
+    };
+  }
 
   const gaps: Array<[number, number]> = [];
-  let cursor = start;
   for (const appointment of fixed) {
     if (appointment.startsAt > cursor) gaps.push([cursor, appointment.startsAt]);
     cursor = Math.max(cursor, appointment.endsAt);
   }
   if (cursor < end) gaps.push([cursor, end]);
 
+  /**
+   * How far the last programme of the day may run past midnight: up to the
+   * next appointment, since overrunning into a live broadcast would put two
+   * things on the row at once.
+   */
+  const nextAppointment = appointments
+    .filter((a) => a.startsAt >= end)
+    .reduce((soonest, a) => Math.min(soonest, a.startsAt), Number.POSITIVE_INFINITY);
+  const overrunLimit = Math.min(nextAppointment, end + MAX_SLOT_MS);
+
   for (const [gapStart, gapEnd] of gaps) {
+    // Only the gap that runs to midnight may be overrun; one ending at an
+    // appointment must not.
+    const ceiling = gapEnd === end ? overrunLimit : gapEnd;
     let at = gapStart;
     let skipped = 0;
 
-    while (gapEnd - at >= MIN_SLOT_MS && skipped < playlist.length) {
-      const item = playlist[next % playlist.length];
-      next += 1;
+    while (gapEnd - at >= MIN_SLOT_MS && skipped < usable.length) {
+      const item = itemAt(subjectId, usable, index, cache);
+      index += 1;
 
-      if (item.durationMs > gapEnd - at) {
-        // Too long for what is left here. Leave it for a wider gap rather than
-        // truncating it — a bar should represent the real length of the thing.
+      if (at + item.durationMs > ceiling) {
+        // Too long even allowing for the overrun. Leave it for a wider gap
+        // rather than truncating it — a bar should be the real length.
         skipped += 1;
         continue;
       }
@@ -191,15 +245,24 @@ export function programmeDay(
       at += item.durationMs;
       skipped = 0;
     }
+
+    cursor = Math.max(cursor, at);
   }
 
-  return placements.sort((a, b) => a.startsAt - b.startsAt);
+  return {
+    placements: placements.sort((a, b) => a.startsAt - b.startsAt),
+    chain: { cursorMs: cursor, index },
+  };
 }
 
 /**
- * Programmes every day a window touches, then clips to the window. Days are
- * programmed whole so that scrolling into tomorrow shows the same schedule it
- * would have shown had the window started there.
+ * Programmes every day the window touches and clips to it.
+ *
+ * Days before the window are programmed too, so the boundaries inside it are
+ * already chained rather than starting cold. Note this makes a day's schedule
+ * depend on where the chain began: two windows starting on different days can
+ * differ in their deep past. Within one window it is stable, which is what the
+ * live-update refetch relies on.
  */
 export function programmeWindow(
   subjectId: number,
@@ -209,9 +272,25 @@ export function programmeWindow(
   library: LibraryItem[],
 ): Placement[] {
   const out: Placement[] = [];
+  const cache = new Map<number, LibraryItem[]>();
+  // An appointment spanning midnight belongs to both days; it is placed once.
+  const placedAppointments = new Set<number>();
 
-  for (let day = dayBounds(fromMs).start; day < toMs; day = dayBounds(day).end) {
-    for (const placement of programmeDay(subjectId, day, appointments, library)) {
+  const firstDay = dayBounds(
+    dayBounds(fromMs).start - CHAIN_LOOKBACK_DAYS * 24 * 60 * 60_000,
+  ).start;
+
+  let chain: Chain = { cursorMs: firstDay, index: 0 };
+
+  for (let day = firstDay; day < toMs; day = dayBounds(day).end) {
+    const result = programmeDay(subjectId, day, appointments, library, chain, cache);
+    chain = result.chain;
+
+    for (const placement of result.placements) {
+      if (placement.isAppointment) {
+        if (placedAppointments.has(placement.programId)) continue;
+        placedAppointments.add(placement.programId);
+      }
       if (placement.endsAt > fromMs && placement.startsAt < toMs) out.push(placement);
     }
   }
