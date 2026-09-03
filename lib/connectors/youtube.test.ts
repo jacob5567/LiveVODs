@@ -237,6 +237,57 @@ describe('mapping videos to observations', () => {
     expect(obs.endsAt.getTime() - obs.startsAt.getTime()).toBe((12 * 60 + 34) * 1000);
   });
 
+  it('skips Shorts, which can never fill a slot', async () => {
+    // No isShort flag exists on the API, but none is needed: anything under the
+    // minimum slot is unprogrammable, and a Shorts-heavy channel would
+    // otherwise crowd its own real videos out of the library.
+    mockYouTube({
+      playlistItems: {
+        items: [{ contentDetails: { videoId: 'vid-1' } }, { contentDetails: { videoId: 'vid-2' } }],
+      },
+      videos: {
+        items: [
+          video({ id: 'vid-1', contentDetails: { duration: 'PT58S' } }),
+          video({ id: 'vid-2', contentDetails: { duration: 'PT41M' } }),
+        ],
+      },
+    });
+
+    const observations = (await connector().fetchSchedule(channel())) as VodObservation[];
+
+    expect(observations).toHaveLength(1);
+    expect(observations[0].platformRef).toBe('vid-2');
+  });
+
+  it('still keeps a short broadcast, which is not a Short', async () => {
+    // A live stream that only ran a few minutes is a real broadcast at a real
+    // time, so it is an appointment rather than library fill.
+    mockYouTube({
+      videos: {
+        items: [
+          video({
+            snippet: { ...video().snippet, liveBroadcastContent: 'live' },
+            contentDetails: { duration: 'P0D' },
+            liveStreamingDetails: { actualStartTime: '2026-09-01T19:00:00Z' },
+          }),
+        ],
+      },
+    });
+
+    const observations = await connector().fetchLive([channel({ watchRefs: ['vid-1'] })]);
+    expect(observations.some((o) => o.kind === 'live')).toBe(true);
+  });
+
+  it('asks for the full page of uploads the endpoint allows', async () => {
+    // Same single quota unit whether it returns one or fifty, and Shorts bury
+    // the real videos, so anything less loses content for free.
+    const { calls } = mockYouTube({ playlistItems: { items: [] } });
+    await connector().fetchSchedule(channel());
+
+    const url = new URL(calls.find((c) => c.includes('/playlistItems?'))!);
+    expect(url.searchParams.get('maxResults')).toBe('50');
+  });
+
   it('drops an upload with no usable duration', async () => {
     mockYouTube({
       playlistItems: { items: [{ contentDetails: { videoId: 'vid-1' } }] },

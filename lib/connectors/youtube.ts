@@ -15,6 +15,7 @@
  * Every call is metered through a QuotaLedger before it is made.
  */
 import type { Observation } from '@/lib/ingest/reconcile';
+import { MIN_SLOT_MS } from '@/lib/schedule';
 import { chunk, type ChannelRef, type Connector, type QuotaLedger, type ResolvedChannel } from './types';
 
 const API = 'https://www.googleapis.com/youtube/v3';
@@ -25,8 +26,16 @@ const VIDEO_BATCH = 50;
 /** Cost in quota units, per the published table. */
 const COST = { channels: 1, playlistItems: 1, videos: 1 } as const;
 
-/** How many recent uploads to inspect per channel when discovering. */
-const DISCOVERY_DEPTH = 15;
+/**
+ * How many recent uploads to inspect per channel when discovering.
+ *
+ * The full 50 the endpoint allows, because it costs exactly the same single
+ * unit as asking for one. It matters more than it looks: the uploads playlist
+ * interleaves Shorts, and a channel posting mostly Shorts buries its real
+ * videos. Bart Ehrman's 25 most recent uploads are 21 Shorts and 4 long
+ * videos — at a depth of 15 the guide would have found barely two.
+ */
+const DISCOVERY_DEPTH = 50;
 
 /**
  * YouTube discovery has to run far more often than Twitch's, because it is the
@@ -292,6 +301,14 @@ export class YouTubeConnector implements Connector {
       if (!details) {
         const durationMs = parseIsoDuration(video.contentDetails?.duration);
         if (durationMs <= 0) continue;
+
+        /**
+         * Shorts. There is no isShort flag on the API, but there does not need
+         * to be: anything below the minimum slot can never be programmed, so
+         * ingesting it only crowds the library — and a Shorts-heavy channel
+         * pushes its own real videos out of the window the guide draws from.
+         */
+        if (durationMs < MIN_SLOT_MS) continue;
 
         const publishedAt = new Date(video.snippet.publishedAt);
         observations.push({
