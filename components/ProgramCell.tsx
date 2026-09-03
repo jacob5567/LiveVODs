@@ -10,14 +10,6 @@ const MIN_LABEL_PX = 54;
 /** Horizontal padding inside a bar, kept in sync with .cell in the stylesheet. */
 const CELL_PADDING_PX = 18;
 
-function formatTime(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-}
-
-function formatDate(ms: number): string {
-  return new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric' });
-}
-
 const px = (ms: number) => (ms / MINUTE_MS) * PX_PER_MINUTE;
 
 export function ProgramCell({
@@ -61,18 +53,6 @@ export function ProgramCell({
     ? `${slot.channelName} · did not air`
     : [slot.channelName, slot.category].filter(Boolean).join(' · ');
 
-  const tooltip = [
-    slot.title,
-    slot.channelName,
-    slot.isAppointment
-      ? `${formatTime(slot.startsAt)} – ${slot.endsAtProvisional ? 'now' : formatTime(slot.endsAt)}`
-      : `${formatTime(slot.startsAt)} – ${formatTime(slot.endsAt)}  ·  ${
-          slot.isUpload ? 'published' : 'aired'
-        } ${formatDate(slot.originalStartsAt)}`,
-  ]
-    .filter(Boolean)
-    .join('\n');
-
   return (
     /**
      * Presentation only. The row is the interactive element — you tune to a
@@ -83,8 +63,9 @@ export function ProgramCell({
       className={classes.join(' ')}
       style={{ left, width: Math.max(width, 2) }}
       data-program={slot.programId}
-      // Narrow bars have no visible label, so the tooltip carries the detail.
-      title={tooltip}
+      // The grid delegates hover from the rows container, so a bar only has to
+      // name itself.
+      data-slot={slot.key}
       aria-hidden="true"
     >
       {roomForLabel && (

@@ -45,6 +45,8 @@ export interface GuideSlot {
   canonicalUrl: string;
   platformRef: string;
   vodRef: string | null;
+  /** Shown in the hover preview; roughly four in five programmes have one. */
+  thumbnailUrl: string | null;
   channelId: number;
   channelName: string;
   /** Twitch login / YouTube handle — what the embed needs. */
@@ -211,6 +213,7 @@ export function loadGuideWindow(from: Date, to: Date, now: Date = new Date()): G
         canonicalUrl: row.canonicalUrl,
         platformRef: row.platformRef,
         vodRef: row.vodRef,
+        thumbnailUrl: row.thumbnailUrl,
         channelId: row.channelId,
         channelName: channel?.displayName ?? '',
         channelLogin: channel?.login ?? '',

@@ -1,10 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Guide, GuideSubject } from '@/lib/guide';
+import type { Guide, GuideSlot, GuideSubject } from '@/lib/guide';
 import { MINUTE_MS, PX_PER_MINUTE } from '@/lib/time';
 import { ProgramCell } from './ProgramCell';
 import { PlayerPane, type Selection } from './PlayerPane';
+import { ProgramPreview } from './ProgramPreview';
 import { useLiveGuide } from './useLiveGuide';
 import styles from './GuideGrid.module.css';
 
@@ -46,6 +47,7 @@ export function GuideGrid({
   const scrollFrame = useRef(0);
   const [now, setNow] = useState(() => Date.now());
   const [selection, setSelection] = useState<Selection | null>(null);
+  const [hover, setHover] = useState<{ slot: GuideSlot; anchor: DOMRect } | null>(null);
 
   /**
    * The selection holds a slot captured at click time. Re-resolving it against
@@ -159,9 +161,46 @@ export function GuideGrid({
       scrollFrame.current = 0;
       content.style.setProperty('--scroll-x', `${node.scrollLeft}px`);
     });
+
+    // The preview is anchored to a rectangle in viewport coordinates, which
+    // scrolling invalidates — drop it rather than leave it pointing at nothing.
+    setHover(null);
   }, []);
 
   useEffect(() => () => cancelAnimationFrame(scrollFrame.current), []);
+
+  const slotsByKey = useMemo(() => {
+    const index = new Map<string, GuideSlot>();
+    for (const subject of guide.subjects) {
+      for (const slot of subject.slots) index.set(slot.key, slot);
+    }
+    return index;
+  }, [guide]);
+
+  /**
+   * Raises the preview for whatever bar the pointer is over.
+   *
+   * Delegated from the rows container rather than bound per bar: a dense row
+   * holds dozens of listings, and mouseover only fires when the target actually
+   * changes. Landing on a gap resolves to nothing and clears, which a per-bar
+   * enter/leave pair would not do without flickering between neighbours.
+   */
+  const handleHover = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      const bar = (event.target as HTMLElement).closest<HTMLElement>('[data-slot]');
+      const slot = bar?.dataset.slot ? slotsByKey.get(bar.dataset.slot) : undefined;
+
+      if (!bar || !slot) {
+        setHover(null);
+        return;
+      }
+      // Bail when it is the same bar, so moving within one does not re-render.
+      setHover((prev) =>
+        prev?.slot.key === slot.key ? prev : { slot, anchor: bar.getBoundingClientRect() },
+      );
+    },
+    [slotsByKey],
+  );
 
   const nudge = (hours: number) =>
     scroller.current?.scrollBy({ left: hours * 60 * PX_PER_MINUTE, behavior: 'smooth' });
@@ -290,6 +329,8 @@ export function GuideGrid({
           className={styles.rows}
           ref={rows}
           onKeyDown={handleKeyDown}
+          onMouseOver={handleHover}
+          onMouseLeave={() => setHover(null)}
           role="grid"
           tabIndex={-1}
         >
@@ -347,6 +388,8 @@ export function GuideGrid({
           )}
         </div>
       </div>
+
+      {hover && <ProgramPreview slot={hover.slot} anchor={hover.anchor} />}
     </div>
   );
 }

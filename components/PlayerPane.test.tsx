@@ -21,6 +21,7 @@ const slot = (overrides: Partial<GuideSlot> = {}): GuideSlot => ({
   originalStartsAt: Date.parse('2026-09-01T19:00:00Z'),
   canonicalUrl: 'https://twitch.tv/alice',
   vodRef: null,
+  thumbnailUrl: null,
   channelId: 1,
   channelName: 'Alice',
   channelLogin: 'alice',

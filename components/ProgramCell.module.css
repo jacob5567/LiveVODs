@@ -40,14 +40,12 @@
   );
 }
 
+/* A listing is not a control — the row is — but it still answers the pointer,
+   which is what raises its preview. */
 .cell:hover {
   filter: brightness(1.25);
 }
 
-.cell:focus-visible {
-  outline: 2px solid var(--text);
-  outline-offset: 1px;
-}
 
 .title {
   font-size: 13px;

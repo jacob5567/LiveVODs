@@ -59,6 +59,7 @@ function slot(programId: number, title: string, startsAt: number, endsAt: number
     originalStartsAt: startsAt,
     canonicalUrl: 'https://twitch.tv/alice',
     vodRef: null,
+    thumbnailUrl: null,
     channelId: 1,
     channelName: 'Alice',
     channelLogin: 'alice',
@@ -240,6 +241,74 @@ describe('GuideGrid', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(screen.queryByRole('link', { name: /Open on/i })).toBeNull();
+  });
+
+  it('previews the programme under the pointer', () => {
+    const { container } = render(<GuideGrid guide={guide()} />);
+    const bar = container.querySelector('[data-slot="k11"]')!;
+
+    fireEvent.mouseOver(bar);
+
+    const preview = container.querySelector('[class*="card"]')!;
+    expect(preview).toBeTruthy();
+    expect(within(preview as HTMLElement).getByText('Beta')).toBeTruthy();
+  });
+
+  it('previews a bar too narrow to carry any label of its own', () => {
+    // The case the preview exists for: under about a quarter-hour a bar renders
+    // no text at all, so the row is otherwise a strip of anonymous colour.
+    const g = guide();
+    g.subjects[0].slots = [slot(50, 'Two Minute Short', NOW, NOW + 2 * MIN)];
+
+    const { container } = render(<GuideGrid guide={g} />);
+    const bar = container.querySelector('[data-slot="k50"]')!;
+
+    // Nothing legible on the bar itself.
+    expect(bar.textContent).toBe('');
+
+    fireEvent.mouseOver(bar);
+    const preview = container.querySelector('[class*="card"]') as HTMLElement;
+    expect(within(preview).getByText('Two Minute Short')).toBeTruthy();
+  });
+
+  it('drops the preview when the pointer moves off a bar', () => {
+    const { container } = render(<GuideGrid guide={guide()} />);
+    const grid = screen.getByRole('grid');
+
+    fireEvent.mouseOver(container.querySelector('[data-slot="k11"]')!);
+    expect(container.querySelector('[class*="card"]')).toBeTruthy();
+
+    // A gap between listings is not a bar, so nothing should still be shown.
+    fireEvent.mouseOver(grid);
+    expect(container.querySelector('[class*="card"]')).toBeNull();
+  });
+
+  it('drops the preview on scroll, since its anchor is a viewport rectangle', () => {
+    const { container } = render(<GuideGrid guide={guide()} />);
+    const scroller = container.querySelector<HTMLElement>('[class*="scroller"]')!;
+
+    fireEvent.mouseOver(container.querySelector('[data-slot="k11"]')!);
+    expect(container.querySelector('[class*="card"]')).toBeTruthy();
+
+    fireEvent.scroll(scroller);
+    expect(container.querySelector('[class*="card"]')).toBeNull();
+  });
+
+  it('shows a repeat as a repeat, with when it first went out', () => {
+    const g = guide();
+    g.subjects[0].slots = [
+      { ...slot(60, 'An Old Upload', NOW, NOW + 30 * MIN),
+        isUpload: true, originalStartsAt: Date.parse('2026-08-20T10:00:00Z') },
+    ];
+
+    const { container } = render(<GuideGrid guide={g} />);
+    fireEvent.mouseOver(container.querySelector('[data-slot="k60"]')!);
+
+    const preview = container.querySelector('[class*="card"]') as HTMLElement;
+    expect(within(preview).getByText('REPLAY')).toBeTruthy();
+    // Read off the card as a whole: the line sits among sibling text nodes, and
+    // the date's ordering belongs to the host locale.
+    expect(preview.textContent).toMatch(/Published .*2026/);
   });
 
   it('explains how to populate an empty lineup', () => {
