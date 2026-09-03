@@ -75,6 +75,29 @@ beforeEach(() => {
   m.db.insert(m.subjectChannels).values({ subjectId, channelId }).run();
 });
 
+function insertLive(startMin: number, provisionalEndMin: number, ref = 'live-1') {
+  m.db
+    .insert(m.programs)
+    .values({
+      channelId,
+      platformRef: ref,
+      title: 'Still Running',
+      category: null,
+      startsAt: at(startMin),
+      endsAt: at(provisionalEndMin),
+      // The worker pegs a running broadcast's end to the last poll, so it
+      // trails real time.
+      endsAtProvisional: true,
+      state: 'live',
+      canonicalUrl: 'https://twitch.tv/alice',
+      thumbnailUrl: null,
+      vodRef: null,
+      isUpload: false,
+      updatedAt: NOW,
+    })
+    .run();
+}
+
 function insertProgram(
   startMin: number,
   endMin: number,
@@ -183,6 +206,46 @@ describe('appointments versus library', () => {
   it('does not treat library fill as still-running', () => {
     insertProgram(-60 * 24 * 2, -60 * 24 * 2 + 30, { ref: 'past' });
     expect(slots().every((s) => s.isAppointment || !s.endsAtProvisional)).toBe(true);
+  });
+});
+
+describe('a broadcast that is still running', () => {
+  it('covers the present even though its recorded end trails real time', () => {
+    // Pegged to a poll a minute ago. Taken literally the row would already have
+    // moved on to library content while the stream is still going.
+    insertLive(-120, -1);
+    insertProgram(-60 * 24 * 3, -60 * 24 * 3 + 30, { ref: 'library' });
+
+    const covering = m
+      .loadGuideWindow(at(-60), at(180), NOW)
+      .subjects[0].slots.filter((s) => s.startsAt <= NOW.getTime() && s.endsAt > NOW.getTime());
+
+    expect(covering).toHaveLength(1);
+    expect(covering[0].title).toBe('Still Running');
+    expect(covering[0].isAppointment).toBe(true);
+  });
+
+  it('does not schedule library content into the lag', () => {
+    insertLive(-120, -1);
+    insertProgram(-60 * 24 * 3, -60 * 24 * 3 + 30, { ref: 'library' });
+
+    const fill = m
+      .loadGuideWindow(at(-60), at(180), NOW)
+      .subjects[0].slots.filter((s) => !s.isAppointment);
+
+    for (const slot of fill) {
+      expect(slot.startsAt).toBeGreaterThanOrEqual(NOW.getTime());
+    }
+  });
+
+  it('leaves a finished broadcast end exactly where it is', () => {
+    insertProgram(-120, -60, { state: 'scheduled', ref: 'done' });
+
+    const slot = m
+      .loadGuideWindow(at(-180), at(180), NOW)
+      .subjects[0].slots.find((s) => s.isAppointment)!;
+
+    expect(slot.endsAt).toBe(at(-60).getTime());
   });
 });
 

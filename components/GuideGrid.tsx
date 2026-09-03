@@ -178,6 +178,9 @@ export function GuideGrid({
     const at = Date.now();
 
     const showing =
+      // A live broadcast is what is on, full stop. Its end time is only ever a
+      // floor while it runs, so it must not have to win a containment test.
+      subject.slots.find((slot) => slot.isAppointment && slot.state === 'live') ??
       subject.slots.find((slot) => slot.startsAt <= at && slot.endsAt > at) ??
       // In a gap — the midnight seam, or a row with little library. Offer
       // whatever is nearest rather than nothing at all.

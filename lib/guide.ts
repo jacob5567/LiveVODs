@@ -8,7 +8,7 @@ import {
   type Platform,
   type ProgramState,
 } from '@/drizzle/schema';
-import { HOUR_MS } from '@/lib/time';
+import { HOUR_MS, LIVE_LEAD_MS } from '@/lib/time';
 import { dayBounds, programmeWindow, type Appointment, type LibraryItem } from '@/lib/schedule';
 
 /** How far back and forward the guide loads around "now". */
@@ -90,6 +90,7 @@ export function loadGuide(now: Date = new Date()): Guide {
   return loadGuideWindow(
     new Date(now.getTime() - GUIDE_PAST_MS),
     new Date(now.getTime() + GUIDE_FUTURE_MS),
+    now,
   );
 }
 
@@ -98,9 +99,10 @@ export function loadGuide(now: Date = new Date()): Guide {
  * client refetches using the window it already has, so a live update swaps the
  * programmes underneath the grid without the whole time axis shifting.
  */
-export function loadGuideWindow(from: Date, to: Date): Guide {
+export function loadGuideWindow(from: Date, to: Date, now: Date = new Date()): Guide {
   const fromMs = from.getTime();
   const toMs = to.getTime();
+  const nowMs = now.getTime();
 
   const subjectRows = db
     .select()
@@ -170,7 +172,15 @@ export function loadGuideWindow(from: Date, to: Date): Guide {
     const appointments: Appointment[] = appointmentRows.map((r) => ({
       programId: r.id,
       startsAt: r.startsAt.getTime(),
-      endsAt: r.endsAt.getTime(),
+      /**
+       * A running broadcast's end is a floor, not a fact — the worker pegs it
+       * to the last poll, so it trails real time by up to the poll interval.
+       * Taken literally, the scheduler fills that lag with library content and
+       * the row appears to have moved on while the stream is still going.
+       */
+      endsAt: r.endsAtProvisional
+        ? Math.max(r.endsAt.getTime(), nowMs + LIVE_LEAD_MS)
+        : r.endsAt.getTime(),
     }));
 
     const library: LibraryItem[] = libraryRows.map((r) => ({

@@ -176,6 +176,24 @@ describe('GuideGrid', () => {
     expect(screen.queryByText(/Joined/)).toBeNull();
   });
 
+  it('tunes to the live broadcast even when its end has fallen behind now', () => {
+    // The worker pegs a running broadcast's end to the last poll, so it trails
+    // real time. Left to a containment test the row hands out the next repeat
+    // while the stream is still on.
+    const g = guide();
+    g.subjects[0].slots = [
+      { ...slot(40, 'Still Running', NOW - 90 * MIN, NOW - MIN),
+        state: 'live', isAppointment: true, endsAtProvisional: true },
+      slot(41, 'A Repeat', NOW - MIN, NOW + 60 * MIN),
+    ];
+
+    render(<GuideGrid guide={g} />);
+    fireEvent.click(row('Speedrunning'));
+
+    expect(pane().getByText('Still Running')).toBeTruthy();
+    expect(pane().queryByText('A Repeat')).toBeNull();
+  });
+
   it('falls back to the nearest programme when the row has a gap now', () => {
     const g = guide();
     // Nothing spans NOW on this row.
