@@ -39,7 +39,6 @@ export function ProgramCell({
   const width = Math.max(2, right - left);
 
   const isLive = slot.state === 'live' && slot.isAppointment;
-  const isMissed = slot.state === 'missed';
   const roomForLabel = width >= MIN_LABEL_PX * metrics.uiScale;
 
   const classes = [styles.cell, styles[slot.state]];
@@ -52,18 +51,23 @@ export function ProgramCell({
   if (endsAfter) classes.push(styles.clippedEnd);
   if (selected) classes.push(styles.selected);
 
-  // A row pools several creators, so the bar has to say whose programme it is —
-  // the channel column no longer answers that.
-  const meta = isMissed
-    ? `${slot.channelName} · did not air`
-    : [
-        slot.channelName,
-        // A marathon airs across several blocks, so a bar has to say which.
-        slot.partCount > 1 ? `Part ${slot.part} of ${slot.partCount}` : null,
-        slot.category,
-      ]
-        .filter(Boolean)
-        .join(' · ');
+  /**
+   * A row pools several creators, so the bar has to say whose programme it is —
+   * the channel column no longer answers that.
+   *
+   * There is no `missed` case here: the guide draws appointments from live and
+   * scheduled rows and fill from aired ones, so a missed slot never reaches the
+   * grid. It leaves a gap that library content takes, which is the better
+   * outcome — a "did not air" bar would just be dead air with a label.
+   */
+  const meta = [
+    slot.channelName,
+    // A marathon airs across several blocks, so a bar has to say which.
+    slot.partCount > 1 ? `Part ${slot.part} of ${slot.partCount}` : null,
+    slot.category,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
   return (
     /**

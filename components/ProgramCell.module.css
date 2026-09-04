@@ -114,24 +114,6 @@
   border-color: color-mix(in srgb, var(--text-dim) 30%, transparent);
 }
 
-.missed {
-  background: repeating-linear-gradient(
-    135deg,
-    var(--missed),
-    var(--missed) 6px,
-    transparent 6px,
-    transparent 12px
-  );
-  border-color: var(--border);
-  border-style: dashed;
-  color: var(--text-dim);
-  cursor: default;
-}
-
-.missed:hover {
-  filter: none;
-}
-
 .badge {
   font-size: calc(10px * var(--ui-scale));
   display: inline-flex;

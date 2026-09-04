@@ -1,8 +1,6 @@
 export const MINUTE_MS = 60_000;
 export const HOUR_MS = 60 * MINUTE_MS;
 
-/** Horizontal scale of the guide. One hour of programming is 240px wide. */
-export const PX_PER_MINUTE = 4;
 
 /**
  * How far a stream may start from its scheduled slot and still be treated as
@@ -40,31 +38,6 @@ export function overlaps(
   windowEnd: Date,
 ): boolean {
   return a.startsAt.getTime() < windowEnd.getTime() && a.endsAt.getTime() > windowStart.getTime();
-}
-
-/** Horizontal offset in px for `time` within a viewport beginning at `viewportStart`. */
-export function xForTime(time: Date, viewportStart: Date): number {
-  return ((time.getTime() - viewportStart.getTime()) / MINUTE_MS) * PX_PER_MINUTE;
-}
-
-export function widthForSpan(startsAt: Date, endsAt: Date): number {
-  return Math.max(0, ((endsAt.getTime() - startsAt.getTime()) / MINUTE_MS) * PX_PER_MINUTE);
-}
-
-export function floorToHalfHour(d: Date): Date {
-  const out = new Date(d);
-  out.setSeconds(0, 0);
-  out.setMinutes(out.getMinutes() < 30 ? 0 : 30);
-  return out;
-}
-
-/**
- * The guide opens looking slightly into the past so a stream that started a
- * while ago is still visible, and a few hours ahead for scheduled programming.
- */
-export function defaultViewport(now: Date): { from: Date; to: Date } {
-  const from = floorToHalfHour(new Date(now.getTime() - HOUR_MS));
-  return { from, to: new Date(from.getTime() + 4 * HOUR_MS) };
 }
 
 /**
