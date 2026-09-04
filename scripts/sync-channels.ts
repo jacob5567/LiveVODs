@@ -56,7 +56,7 @@ function parseConfig(raw: string): SubjectConfig[] {
         `${CONFIG_PATH} uses the old flat format. Each row of the guide is now a\n` +
           `subject pooling several channels. Wrap your lists like this:\n\n` +
           `  subjects:\n    - name: Speedrunning\n      twitch:\n        - GamesDoneQuick\n` +
-          `      youtube:\n        - "@SimpleFlips"\n\n` +
+          `      youtube:\n        - "@smallant"\n\n` +
           `See ${EXAMPLE_PATH}.\n`,
       );
       process.exit(1);

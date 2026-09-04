@@ -23,20 +23,21 @@
 # catalogue to fill a day and it behaves like a real channel.
 
 subjects:
+  - name: Tech
+    youtube:
+      - "@mkbhd"
+      - "@jayztwocents"
+
+  - name: Making & Science
+    youtube:
+      - "@tested"
+      - "@tomscottgo"
+      - "@brickexperimentchannel"
+
   - name: Speedrunning
     twitch:
       - GamesDoneQuick
-      - SimpleFlips
+      - SpeedGaming
     youtube:
-      - "@SimpleFlips"
-
-  - name: Coffee
-    youtube:
-      - "@jameshoffmann"
-
-  - name: Programming
-    twitch:
-      - theprimeagen
-      - tsoding
-    youtube:
-      - "@ThePrimeTimeagen"
+      - "@EazySpeezy"
+      - "@smallant"
