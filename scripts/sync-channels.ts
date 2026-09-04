@@ -325,10 +325,16 @@ async function main(): Promise<void> {
   );
 
   if (orphans.length > 0) {
+    // Nothing will observe these channels again, so anything still open on one
+    // has to be closed here or it stays open forever.
+    const { closeUntrackedPrograms } = await import('@/lib/ingest/persist');
+    const closed = closeUntrackedPrograms();
+
     console.log(
       `\n${orphans.length} channel(s) belong to no subject and are no longer polled:\n` +
         orphans.map((o) => `  ${o.displayName}`).join('\n') +
-        `\nTheir programs are kept. Add them to a subject to bring them back.`,
+        `\nTheir programs are kept. Add them to a subject to bring them back.` +
+        (closed > 0 ? `\nClosed ${closed} broadcast(s) that were still open on them.` : ''),
     );
   }
 }

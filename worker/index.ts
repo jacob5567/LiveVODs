@@ -17,9 +17,15 @@ async function main(): Promise<void> {
   const { YouTubeConnector } = await import('@/lib/connectors/youtube');
   const { youtubeLedger } = await import('@/lib/ingest/quota');
   const { startPoller } = await import('@/lib/ingest/poller');
+  const { closeUntrackedPrograms } = await import('@/lib/ingest/persist');
   const { migrate } = await import('drizzle-orm/better-sqlite3/migrator');
 
   migrate(db, { migrationsFolder: './drizzle/migrations' });
+
+  // A channel dropped from the lineup while this was not running left its
+  // broadcasts open, and nothing polls it now to close them.
+  const closed = closeUntrackedPrograms();
+  if (closed > 0) console.log(`closed ${closed} broadcast(s) on channels no longer polled`);
 
   const quota = youtubeLedger();
   const connectors = [TwitchConnector.fromEnv(), YouTubeConnector.fromEnv(quota)].filter(

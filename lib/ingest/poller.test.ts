@@ -309,3 +309,96 @@ describe('poller integration', () => {
     expect(requested).toEqual(['111']);
   });
 });
+
+/**
+ * The reconciler can only act on what the working set contains and what the
+ * live poll re-checks, so the bounds on those two queries are load-bearing.
+ */
+describe('persistence bounds', () => {
+  const DAY = 24 * 60 * 60_000;
+
+  const makeChannel = (login: string, platformChannelId: string) =>
+    m.db
+      .insert(m.channels)
+      .values({ platform: 'twitch', platformChannelId, login, displayName: login, enabled: true })
+      .returning({ id: m.channels.id })
+      .all()[0].id;
+
+  const makeProgram = (cid: number, ref: string, state: 'live' | 'scheduled', startsAt: Date) =>
+    m.db
+      .insert(m.programs)
+      .values({
+        channelId: cid,
+        platformRef: ref,
+        title: ref,
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + 60 * 60_000),
+        endsAtProvisional: state === 'live',
+        state,
+        canonicalUrl: 'https://twitch.tv/x',
+        isUpload: false,
+      })
+      .returning({ id: m.programs.id })
+      .all()[0].id;
+
+  const stateOf = (id: number) =>
+    m.db.select().from(m.programs).where(eqId(m.programs.id, id)).get();
+
+  it('closes a broadcast left open on a channel dropped from every subject', async () => {
+    const { closeUntrackedPrograms } = await import('./persist');
+    // Only channels feeding a subject are polled, so nothing will ever observe
+    // this one again — and its live row would otherwise stay live forever.
+    const orphan = makeChannel('dropped', 'orphan-1');
+    const wasLive = makeProgram(orphan, 'orphan-live', 'live', new Date(Date.now() - 3 * 60 * 60_000));
+    const wasScheduled = makeProgram(orphan, 'orphan-slot', 'scheduled', new Date(Date.now() + DAY));
+
+    expect(closeUntrackedPrograms()).toBeGreaterThanOrEqual(1);
+    expect(stateOf(wasLive)).toMatchObject({ state: 'aired', endsAtProvisional: false });
+    // The announced slot is left intact: nothing polls or renders it, and
+    // leaving it scheduled is what lets it come back whole if the channel does.
+    expect(stateOf(wasScheduled)).toMatchObject({ state: 'scheduled' });
+
+    m.db.delete(m.channels).where(eqId(m.channels.id, orphan)).run();
+  });
+
+  it('leaves demo fixtures open, since they are meant to look live', async () => {
+    const { closeUntrackedPrograms } = await import('./persist');
+    const demo = makeChannel('demo-orphan', 'demo-twitch-9');
+    const live = makeProgram(demo, 'demo-live', 'live', new Date(Date.now() - 60_000));
+
+    closeUntrackedPrograms();
+
+    expect(stateOf(live)).toMatchObject({ state: 'live' });
+    m.db.delete(m.channels).where(eqId(m.channels.id, demo)).run();
+  });
+
+  it('keeps a far-future slot in the working set so it is not rewritten every pass', async () => {
+    const { loadWorkingSet } = await import('./persist');
+    // Twitch returns recurring segments months out. A slot the working set
+    // cannot see is re-inserted on every pass, and the upsert rewrites it with
+    // a fresh updated_at — which moves the revision token and makes every
+    // connected browser refetch a guide that did not change.
+    const far = makeProgram(channelId, 'far-slot', 'scheduled', new Date(Date.now() + 60 * DAY));
+
+    expect(loadWorkingSet([channelId], new Date()).map((r) => r.id)).toContain(far);
+
+    m.db.delete(m.programs).where(eqId(m.programs.id, far)).run();
+  });
+
+  it('re-checks a slot starting soon but not one months away', async () => {
+    const { loadWatchRefs } = await import('./persist');
+    // On YouTube every ref costs quota on a per-minute poll, and a premiere
+    // three months out cannot start today.
+    const soon = makeProgram(channelId, 'soon-slot', 'scheduled', new Date(Date.now() + 60 * 60_000));
+    const distant = makeProgram(channelId, 'distant-slot', 'scheduled', new Date(Date.now() + 60 * DAY));
+
+    const refs = loadWatchRefs([channelId], new Date()).get(channelId) ?? [];
+
+    expect(refs).toContain('soon-slot');
+    expect(refs).not.toContain('distant-slot');
+
+    for (const id of [soon, distant]) {
+      m.db.delete(m.programs).where(eqId(m.programs.id, id)).run();
+    }
+  });
+});

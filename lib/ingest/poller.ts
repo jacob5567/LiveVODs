@@ -31,8 +31,11 @@ const REQUEST_SPACING_MS = 120;
  * every pass makes the daily spend proportional to how many channels there
  * are — at 131 channels that projected 25,000 units against a 9,500 budget,
  * and ingest would simply stop until the quota reset. Refreshing a rotating
- * slice keeps the cost per pass flat however far the lineup grows; a channel
- * comes round roughly hourly, which is ample for noticing a new upload.
+ * slice keeps the cost per pass flat however far the lineup grows.
+ *
+ * The trade is freshness: a channel comes round every lineup/batch passes, so
+ * at 180 YouTube channels a new upload takes up to six hours to appear rather
+ * than the one hour the pass interval suggests.
  */
 const DISCOVERY_BATCH = 30;
 
