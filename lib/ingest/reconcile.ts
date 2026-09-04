@@ -23,7 +23,12 @@
  * branch above testable without credentials, and it is why `now` is a parameter.
  */
 import type { ProgramState } from '@/drizzle/schema';
-import { MIN_LIVE_BAR_MS, MISSED_GRACE_MS, SLOT_TOLERANCE_MS } from '@/lib/time';
+import {
+  DEFAULT_SLOT_MS,
+  MIN_LIVE_BAR_MS,
+  MISSED_GRACE_MS,
+  SLOT_TOLERANCE_MS,
+} from '@/lib/time';
 
 /** A program as it currently exists in the database. */
 export interface ProgramRecord {
@@ -55,7 +60,7 @@ export interface ScheduledObservation {
   title: string;
   category: string | null;
   startsAt: Date;
-  /** Twitch gives an end time; YouTube premieres do not, so null means "assume a default slot". */
+  /** Null where the end is genuinely unknowable — a livestream announced with no duration. */
   endsAt: Date | null;
   canonicalUrl: string;
   thumbnailUrl: string | null;
@@ -117,8 +122,6 @@ export type Observation =
 export type Write =
   | { op: 'insert'; row: NewProgram }
   | { op: 'update'; id: number; patch: ProgramPatch };
-
-const DEFAULT_SLOT_MS = 2 * 60 * 60 * 1000;
 
 interface WorkingRow {
   /** null for rows created during this pass. */

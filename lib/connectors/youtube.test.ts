@@ -177,13 +177,15 @@ describe('mapping videos to observations', () => {
     expect(observations.some((o) => o.kind === 'offline')).toBe(false);
   });
 
-  it('maps an announced premiere to a scheduled slot with no end time', async () => {
+  it('gives a scheduled livestream no end time, because it has no file yet', async () => {
     mockYouTube({
       playlistItems: { items: [{ contentDetails: { videoId: 'vid-1' } }] },
       videos: {
         items: [
           video({
             snippet: { ...video().snippet, liveBroadcastContent: 'upcoming' },
+            // P0D is what YouTube reports for a broadcast that has not happened.
+            contentDetails: { duration: 'P0D' },
             liveStreamingDetails: { scheduledStartTime: '2026-09-02T19:00:00Z' },
           }),
         ],
@@ -193,9 +195,30 @@ describe('mapping videos to observations', () => {
     const [obs] = (await connector().fetchSchedule(channel())) as ScheduledObservation[];
 
     expect(obs.startsAt).toEqual(new Date('2026-09-02T19:00:00Z'));
-    // YouTube announces a start but never a duration; the reconciler supplies
-    // its default slot length.
+    // Nobody knows how long it will run, so the reconciler supplies its default.
     expect(obs.endsAt).toBeNull();
+  });
+
+  it('sizes a premiere by its real length rather than the default slot', async () => {
+    // A premiere is a finished video with an air date. Its duration is known
+    // now, so a 15-minute premiere must not sit in a two-hour hole on the grid.
+    mockYouTube({
+      playlistItems: { items: [{ contentDetails: { videoId: 'vid-1' } }] },
+      videos: {
+        items: [
+          video({
+            snippet: { ...video().snippet, liveBroadcastContent: 'upcoming' },
+            contentDetails: { duration: 'PT15M' },
+            liveStreamingDetails: { scheduledStartTime: '2026-09-02T19:00:00Z' },
+          }),
+        ],
+      },
+    });
+
+    const [obs] = (await connector().fetchSchedule(channel())) as ScheduledObservation[];
+
+    expect(obs.startsAt).toEqual(new Date('2026-09-02T19:00:00Z'));
+    expect(obs.endsAt).toEqual(new Date('2026-09-02T19:15:00Z'));
   });
 
   it('maps a finished broadcast to a VOD with its real duration', async () => {

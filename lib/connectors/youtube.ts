@@ -392,14 +392,21 @@ export class YouTubeConnector implements Connector {
       }
 
       if (details.scheduledStartTime) {
+        const startsAt = new Date(details.scheduledStartTime);
+        /**
+         * A premiere is a finished video with an air date, so its real length
+         * is already known and the slot should be exactly that long. A
+         * scheduled livestream has no file yet and reports P0D — there the
+         * reconciler's default slot is the best guess available.
+         */
+        const durationMs = parseIsoDuration(video.contentDetails?.duration);
+
         observations.push({
           kind: 'scheduled',
           ...common,
           category: null,
-          startsAt: new Date(details.scheduledStartTime),
-          // YouTube announces a start but never a duration, so the reconciler
-          // applies its default slot length.
-          endsAt: null,
+          startsAt,
+          endsAt: durationMs > 0 ? new Date(startsAt.getTime() + durationMs) : null,
         });
       }
     }
