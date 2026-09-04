@@ -208,12 +208,20 @@ export function reconcile(
       return;
     }
 
-    // A slot that already aired had its platformRef rebound from the segment id
-    // to the stream id, so it no longer matches by key. Without this check the
-    // next schedule sync would resurrect it as a duplicate scheduled row.
+    /**
+     * A slot that already aired had its platformRef rebound from the segment id
+     * to the stream id, so it no longer matches by key. Without this check the
+     * next schedule sync would resurrect it as a duplicate scheduled row.
+     *
+     * Uploads are exempt. They are library content that never aired, so one can
+     * never be the aired form of an announced slot — and since the backfill
+     * landed, a channel carries hundreds of them. Counting them here meant any
+     * video published within the tolerance of a premiere silently swallowed it.
+     */
     const alreadyAired = channelRows(obs.channelId).some(
       (r) =>
         r.current.state !== 'scheduled' &&
+        !r.current.isUpload &&
         Math.abs(r.current.startsAt.getTime() - obs.startsAt.getTime()) <= SLOT_TOLERANCE_MS,
     );
     if (alreadyAired) return;

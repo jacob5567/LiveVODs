@@ -340,6 +340,29 @@ describe('idempotency', () => {
     expect(inserts(writes)).toHaveLength(0);
   });
 
+  it('still announces a premiere when the channel has a recent upload nearby', () => {
+    // Since the backfill landed, every channel carries hundreds of uploads. An
+    // upload is library content that never aired, so it is not the aired form
+    // of anything — but it used to count against the tolerance window and
+    // silently swallow any premiere announced close to it.
+    const upload = program({
+      id: 41,
+      platformRef: 'upload-abc',
+      state: 'aired',
+      isUpload: true,
+      startsAt: at(-20),
+      endsAt: at(5),
+    });
+
+    const premiere = scheduled({
+      platformRef: 'premiere-xyz',
+      startsAt: at(10),
+      endsAt: at(25),
+    });
+
+    expect(inserts(reconcile([upload], [premiere], NOW))).toHaveLength(1);
+  });
+
   it('handles a full lifecycle without duplicating the program', () => {
     let rows: ProgramRecord[] = [];
     let nextId = 1;
