@@ -16,6 +16,8 @@ import type { ResolvedChannel } from '@/lib/connectors/types';
 loadEnv();
 
 const DRY_RUN = process.argv.includes('--dry-run');
+/** Re-resolve every channel, even ones already known. Refreshes names and avatars. */
+const REFRESH = process.argv.includes('--refresh');
 const CONFIG_PATH = 'config/channels.yml';
 const EXAMPLE_PATH = 'config/channels.example.yml';
 
@@ -79,7 +81,7 @@ async function main(): Promise<void> {
   const { channels, subjects, subjectChannels } = await import('@/drizzle/schema');
   const { TwitchConnector } = await import('@/lib/connectors/twitch');
   const { YouTubeConnector } = await import('@/lib/connectors/youtube');
-  const { MemoryQuotaLedger } = await import('@/lib/ingest/quota');
+  const { youtubeLedger } = await import('@/lib/ingest/quota');
   const { and, eq, notInArray } = await import('drizzle-orm');
   const { migrate } = await import('drizzle-orm/better-sqlite3/migrator');
 
@@ -87,9 +89,17 @@ async function main(): Promise<void> {
 
   const configured = parseConfig(readConfig());
 
-  // A memory ledger: a sync is a one-off and should not eat into the worker's
-  // persisted daily budget.
-  const quota = new MemoryQuotaLedger();
+  /**
+   * The persisted ledger, not a throwaway one.
+   *
+   * The daily quota belongs to the API key, which the worker shares — so a
+   * sync that counted its own spend separately left the worker believing it
+   * had budget that Google had already given away, and both overshot. It also
+   * means a sync can say up front that there is not enough left, rather than
+   * discovering it halfway through as a 403.
+   */
+  const quota = youtubeLedger();
+  const quotaAtStart = quota.remaining();
   const twitch = TwitchConnector.fromEnv();
   const youtube = YouTubeConnector.fromEnv(quota);
 
@@ -106,11 +116,35 @@ async function main(): Promise<void> {
       (DRY_RUN ? '  [dry run — nothing will be written]' : ''),
   );
 
+  /**
+   * Channels resolved by an earlier sync, keyed by the identifier the config
+   * uses. Their platform id, name and avatar are already stored, so resolving
+   * them again buys nothing.
+   */
+  const alreadyKnown = (platform: Platform): Map<string, ResolvedChannel> =>
+    new Map(
+      db
+        .select()
+        .from(channels)
+        .where(eq(channels.platform, platform))
+        .all()
+        .map((c) => [
+          c.login.toLowerCase(),
+          {
+            platformChannelId: c.platformChannelId,
+            login: c.login,
+            displayName: c.displayName,
+            avatarUrl: c.avatarUrl,
+          },
+        ]),
+    );
+
   const resolved: Record<Platform, Map<string, ResolvedChannel>> = {
     twitch: new Map(),
     youtube: new Map(),
   };
   let missing = 0;
+  let reused = 0;
 
   for (const [platform, connector, hint] of [
     ['twitch', twitch, 'TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET not set'],
@@ -125,8 +159,38 @@ async function main(): Promise<void> {
       continue;
     }
 
-    resolved[platform] = await connector.resolveChannels(identifiers);
-    console.log(`\n  ${platform}: resolved ${resolved[platform].size}/${identifiers.length}`);
+    /**
+     * Only ask the API about identifiers it has not already answered for.
+     *
+     * YouTube charges a quota unit per handle, so re-resolving the whole
+     * lineup made every sync cost as much as the number of channels — at 155
+     * that was more than a sixth of a day's budget to learn nothing new. A
+     * channel that has renamed its handle simply misses the cache and is
+     * resolved, which is the behaviour wanted anyway.
+     */
+    const known = REFRESH ? new Map<string, ResolvedChannel>() : alreadyKnown(platform);
+    const fresh = identifiers.filter((id) => !known.has(id.toLowerCase()));
+
+    // YouTube charges a unit per handle. Check the whole job is affordable
+    // before starting it, so a sync either completes or does not begin.
+    if (platform === 'youtube' && fresh.length > quota.remaining()) {
+      console.error(
+        `\n  youtube: need ${fresh.length} quota units to resolve ${fresh.length} new ` +
+          `channel(s) but only ${quota.remaining()} remain today.\n` +
+          `  Nothing has been written. The quota resets at midnight Pacific.`,
+      );
+      process.exit(1);
+    }
+    const fetched = fresh.length > 0 ? await connector.resolveChannels(fresh) : new Map();
+
+    resolved[platform] = new Map([...known, ...fetched]);
+    const cached = identifiers.length - fresh.length;
+    reused += cached;
+
+    console.log(
+      `\n  ${platform}: ${identifiers.length} channels — ` +
+        `${cached} already known, ${fetched.size}/${fresh.length} newly resolved`,
+    );
 
     for (const id of identifiers) {
       if (!resolved[platform].has(id.toLowerCase())) {
@@ -254,7 +318,10 @@ async function main(): Promise<void> {
   console.log(
     `\n${DRY_RUN ? 'would sync' : 'synced'}: ${configured.length} subjects, ` +
       `${resolved.twitch.size + resolved.youtube.size} channels, ${missing} unresolved` +
-      (quota.spent() > 0 ? `  (youtube quota used: ${quota.spent()} units)` : ''),
+      (reused > 0 ? `, ${reused} reused without an API call` : '') +
+      (quotaAtStart - quota.remaining() > 0
+        ? `  (youtube quota used: ${quotaAtStart - quota.remaining()} units)`
+        : '  (no youtube quota spent)'),
   );
 
   if (orphans.length > 0) {
@@ -266,7 +333,20 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
+  const { QuotaExhaustedError } = await import('@/lib/connectors/youtube');
+
+  // Expected once a day at worst, and self-healing at the reset. Nothing is
+  // written when it happens, because resolution runs before any write.
+  if (error instanceof QuotaExhaustedError) {
+    console.error(
+      '\nYouTube says the daily quota is spent, so the new channels could not be\n' +
+        'resolved. Nothing was written. It resets at midnight Pacific — run this\n' +
+        'again after that.',
+    );
+    process.exit(1);
+  }
+
   console.error('sync failed:', error);
   process.exit(1);
 });
