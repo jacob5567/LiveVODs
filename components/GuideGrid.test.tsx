@@ -107,7 +107,7 @@ describe('GuideGrid', () => {
     const { container } = render(<GuideGrid guide={guide()} />);
 
     const scroller = container.querySelector<HTMLElement>('[class*="scroller"]')!;
-    const rows = container.querySelector<HTMLElement>('[role="grid"]')!;
+    const rows = container.querySelector<HTMLElement>('[role="group"]')!;
 
     Object.defineProperty(scroller, 'scrollLeft', { value: 640, configurable: true });
     fireEvent.scroll(scroller);
@@ -121,7 +121,7 @@ describe('GuideGrid', () => {
   it('coalesces a burst of scroll events into one write', async () => {
     const { container } = render(<GuideGrid guide={guide()} />);
     const scroller = container.querySelector<HTMLElement>('[class*="scroller"]')!;
-    const rows = container.querySelector<HTMLElement>('[role="grid"]')!;
+    const rows = container.querySelector<HTMLElement>('[role="group"]')!;
 
     const setProperty = vi.spyOn(rows.style, 'setProperty');
 
@@ -151,6 +151,36 @@ describe('GuideGrid', () => {
     // Tuning is per channel, so a listing must not be focusable in its own right.
     expect(container.querySelectorAll('button[data-program]')).toHaveLength(0);
     expect(screen.getAllByRole('button', { name: /Tune in to/ })).toHaveLength(2);
+  });
+
+  it('names the row by what it is playing, since the bars are hidden', () => {
+    // Bars are aria-hidden — dozens of absolutely positioned slivers per row is
+    // noise, not information. So the row, which is the actual control, has to
+    // carry what a sighted viewer reads off the grid, or assistive tech is
+    // offered a button with nothing to say about what it plays.
+    render(<GuideGrid guide={guide()} />);
+
+    const name = row('Speedrunning').getAttribute('aria-label') ?? '';
+
+    expect(name).toContain('Tune in to Speedrunning');
+    // Beta is the programme containing now; Alpha and Gamma are not.
+    expect(name).toContain('Beta');
+    expect(name).toContain('Alice');
+    expect(name).not.toContain('Alpha');
+  });
+
+  it('announces a live broadcast as live rather than giving it an end time', () => {
+    const g = guide();
+    g.subjects[0].slots = [
+      { ...slot(30, 'Marathon', NOW - 20 * MIN, NOW + 5 * MIN), state: 'live', isAppointment: true },
+    ];
+    render(<GuideGrid guide={g} />);
+
+    const name = row('Speedrunning').getAttribute('aria-label') ?? '';
+
+    expect(name).toContain('Live now: Marathon');
+    // A running broadcast has no honest end time to announce.
+    expect(name).not.toContain('until');
   });
 
   it('tunes in to whatever the row is showing now', () => {
@@ -242,10 +272,10 @@ describe('GuideGrid', () => {
     render(<GuideGrid guide={guide()} />);
 
     row('Speedrunning').focus();
-    fireEvent.keyDown(screen.getByRole('grid'), { key: 'ArrowDown' });
+    fireEvent.keyDown(screen.getByRole('group', { name: 'Channel guide' }), { key: 'ArrowDown' });
     expect(document.activeElement).toBe(row('Coffee'));
 
-    fireEvent.keyDown(screen.getByRole('grid'), { key: 'ArrowUp' });
+    fireEvent.keyDown(screen.getByRole('group', { name: 'Channel guide' }), { key: 'ArrowUp' });
     expect(document.activeElement).toBe(row('Speedrunning'));
   });
 
@@ -253,7 +283,7 @@ describe('GuideGrid', () => {
     render(<GuideGrid guide={guide()} />);
 
     row('Speedrunning').focus();
-    fireEvent.keyDown(screen.getByRole('grid'), { key: 'ArrowUp' });
+    fireEvent.keyDown(screen.getByRole('group', { name: 'Channel guide' }), { key: 'ArrowUp' });
     expect(document.activeElement).toBe(row('Speedrunning'));
   });
 
@@ -305,7 +335,7 @@ describe('GuideGrid', () => {
 
   it('drops the preview when the pointer moves off a bar', () => {
     const { container } = render(<GuideGrid guide={guide()} />);
-    const grid = screen.getByRole('grid');
+    const grid = screen.getByRole('group', { name: 'Channel guide' });
 
     fireEvent.mouseOver(container.querySelector('[data-slot="k11"]')!);
     expect(container.querySelector('[class*="card"]')).toBeTruthy();

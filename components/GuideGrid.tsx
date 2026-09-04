@@ -20,6 +20,54 @@ const LEAD_IN_MIN = 60;
 
 const minutesFrom = (ms: number, from: number) => (ms - from) / MINUTE_MS;
 
+/**
+ * What a row is showing at `at`.
+ *
+ * Shared so that tuning in and describing the row to a screen reader can never
+ * disagree: whatever this returns is both what Enter plays and what the label
+ * announces.
+ */
+function showingNow(subject: GuideSubject, at: number): GuideSlot | undefined {
+  return (
+    // A live broadcast is what is on, full stop. Its end time is only ever a
+    // floor while it runs, so it must not have to win a containment test.
+    subject.slots.find((slot) => slot.isAppointment && slot.state === 'live') ??
+    subject.slots.find((slot) => slot.startsAt <= at && slot.endsAt > at) ??
+    // In a gap — the midnight seam, or a row with little library. Offer
+    // whatever is nearest rather than nothing at all.
+    [...subject.slots].sort((a, b) => Math.abs(a.startsAt - at) - Math.abs(b.startsAt - at))[0]
+  );
+}
+
+/**
+ * The row's accessible name.
+ *
+ * Bars are aria-hidden — they are absolutely positioned slivers, and reading
+ * out thirty of them per row is noise rather than information. But the row is
+ * the control, so its name has to carry what the bars show visually, or a
+ * screen reader is offered a button with nothing to say about what it plays.
+ */
+function rowLabel(subject: GuideSubject, at: number): string {
+  const action = `Tune in to ${subject.name}`;
+  const showing = showingNow(subject, at);
+  if (!showing) return `${action}. Nothing scheduled.`;
+
+  const isLive = showing.isAppointment && showing.state === 'live';
+  const detail = [
+    `${isLive ? 'Live now' : 'Now'}: ${showing.title}`,
+    showing.channelName ? `on ${showing.channelName}` : null,
+    showing.partCount > 1 ? `part ${showing.part} of ${showing.partCount}` : null,
+    isLive
+      ? null
+      : `until ${new Date(showing.endsAt).toLocaleTimeString([], {
+          hour: 'numeric',
+          minute: '2-digit',
+        })}`,
+  ].filter(Boolean);
+
+  return `${action}. ${detail.join(', ')}.`;
+}
+
 function formatHour(ms: number): string {
   const d = new Date(ms);
   return d.getMinutes() === 0
@@ -110,6 +158,15 @@ export function GuideGrid({
     [guide.from, xFor, metrics.pxPerMinute],
   );
 
+  /**
+   * Whether the opening scroll has landed. Kept in a ref so it survives the
+   * effect re-running when the responsive metrics settle — the viewer scrolls
+   * where they like after that, and nothing may pull them back.
+   */
+  const positioned = useRef(false);
+  const offsetForNowRef = useRef(offsetForNow);
+  offsetForNowRef.current = offsetForNow;
+
   const scrollToNow = useCallback(() => {
     scroller.current?.scrollTo({ left: offsetForNow(), behavior: 'smooth' });
   }, [offsetForNow]);
@@ -124,13 +181,10 @@ export function GuideGrid({
    * actually scrollable clamps silently to 0, and re-applying costs nothing when
    * the first attempt already worked.
    */
-  const attachScroller = useCallback(
-    (node: HTMLDivElement | null) => {
-      scroller.current = node;
-      if (node) node.scrollLeft = offsetForNow();
-    },
-    [offsetForNow],
-  );
+  const attachScroller = useCallback((node: HTMLDivElement | null) => {
+    scroller.current = node;
+    if (node && !positioned.current) node.scrollLeft = offsetForNowRef.current();
+  }, []);
 
   /**
    * The callback ref above lands the scroll during commit, but an element is
@@ -142,18 +196,18 @@ export function GuideGrid({
    * Applies once, so it never yanks the view back after the viewer scrolls.
    */
   useEffect(() => {
+    if (positioned.current) return;
     const node = scroller.current;
     const content = rows.current;
     if (!node || !content) return;
 
-    let applied = false;
     const apply = () => {
-      if (applied || node.scrollWidth <= node.clientWidth) return;
+      if (positioned.current || node.scrollWidth <= node.clientWidth) return;
       node.scrollLeft = offsetForNow();
       // Seed the label offset: setting scrollLeft programmatically does fire a
       // scroll event, but publishing here means the first paint is already right.
       content.style.setProperty('--scroll-x', `${node.scrollLeft}px`);
-      applied = true;
+      positioned.current = true;
       observer.disconnect();
     };
 
@@ -221,11 +275,14 @@ export function GuideGrid({
     [slotsByKey],
   );
 
-  const nudge = (hours: number) =>
-    scroller.current?.scrollBy({
-      left: hours * 60 * metrics.pxPerMinute,
-      behavior: 'smooth',
-    });
+  const nudge = useCallback(
+    (hours: number) =>
+      scroller.current?.scrollBy({
+        left: hours * 60 * metrics.pxPerMinute,
+        behavior: 'smooth',
+      }),
+    [metrics.pxPerMinute],
+  );
 
   /**
    * Tuning in to a row, the way changing channel on a television does: whatever
@@ -237,17 +294,7 @@ export function GuideGrid({
    */
   const tuneIn = useCallback((subject: GuideSubject) => {
     const at = Date.now();
-
-    const showing =
-      // A live broadcast is what is on, full stop. Its end time is only ever a
-      // floor while it runs, so it must not have to win a containment test.
-      subject.slots.find((slot) => slot.isAppointment && slot.state === 'live') ??
-      subject.slots.find((slot) => slot.startsAt <= at && slot.endsAt > at) ??
-      // In a gap — the midnight seam, or a row with little library. Offer
-      // whatever is nearest rather than nothing at all.
-      [...subject.slots].sort(
-        (a, b) => Math.abs(a.startsAt - at) - Math.abs(b.startsAt - at),
-      )[0];
+    const showing = showingNow(subject, at);
 
     if (!showing) return;
 
@@ -294,7 +341,7 @@ export function GuideGrid({
       event.preventDefault();
       nudge(event.key === 'ArrowRight' ? 1 : -1);
     }
-  }, []);
+  }, [nudge]);
 
   const liveCount = guide.subjects.reduce(
     (n, s) => n + s.slots.filter((slot) => slot.state === 'live' && slot.isAppointment).length,
@@ -355,7 +402,8 @@ export function GuideGrid({
           onKeyDown={handleKeyDown}
           onMouseOver={handleHover}
           onMouseLeave={() => setHover(null)}
-          role="grid"
+          role="group"
+          aria-label="Channel guide"
           tabIndex={-1}
         >
           {guide.subjects.map((subject) => (
@@ -367,7 +415,7 @@ export function GuideGrid({
               role="button"
               tabIndex={0}
               data-row={subject.id}
-              aria-label={`Tune in to ${subject.name}`}
+              aria-label={rowLabel(subject, now)}
               onClick={() => tuneIn(subject)}
               onKeyDown={(event) => {
                 if (event.key !== 'Enter' && event.key !== ' ') return;
