@@ -226,6 +226,51 @@ describe('poller integration', () => {
     }
   });
 
+  it('will not start a backfill that would eat the remaining budget', async () => {
+    // Backfill is a one-off worth thousands of units. Finishing it a day sooner
+    // is worth far less than the guide going stale.
+    const { runBackfillTick } = await import('./poller');
+    const { MemoryQuotaLedger } = await import('./quota');
+
+    let called = 0;
+    const conn = {
+      platform: 'twitch' as const,
+      resolveChannels: async () => new Map(),
+      fetchLive: async () => [],
+      fetchSchedule: async () => [],
+      fetchRecentVods: async () => [],
+      fetchBackfill: async () => { called += 1; return []; },
+    };
+
+    await runBackfillTick(conn, new MemoryQuotaLedger(100));
+    expect(called).toBe(0);
+
+    await runBackfillTick(conn, new MemoryQuotaLedger(10_000));
+    expect(called).toBeGreaterThan(0);
+  });
+
+  it('backfills a channel once and then leaves it alone', async () => {
+    const { runBackfillTick } = await import('./poller');
+    const { MemoryQuotaLedger } = await import('./quota');
+
+    const seen: string[] = [];
+    const conn = {
+      platform: 'twitch' as const,
+      resolveChannels: async () => new Map(),
+      fetchLive: async () => [],
+      fetchSchedule: async () => [],
+      fetchRecentVods: async () => [],
+      fetchBackfill: async (c: any) => { seen.push(c.login); return []; },
+    };
+
+    await runBackfillTick(conn, new MemoryQuotaLedger(10_000));
+    const first = seen.length;
+    await runBackfillTick(conn, new MemoryQuotaLedger(10_000));
+
+    // A catalogue does not change, so a done channel is never revisited.
+    expect(seen.slice(first)).not.toContain(seen[0]);
+  });
+
   it('leaves demo fixture channels out of polling entirely', async () => {
     const [demo] = m.db
       .insert(m.channels)

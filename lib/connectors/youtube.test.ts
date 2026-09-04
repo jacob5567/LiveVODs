@@ -314,6 +314,85 @@ describe('mapping videos to observations', () => {
   });
 });
 
+describe('backfilling a catalogue', () => {
+  /** playlistItems paginated: three pages, the last one short. */
+  function paged(pages: string[][]) {
+    let call = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL) => {
+        const url = String(input);
+        if (url.includes('/playlistItems?')) {
+          const page = pages[call++] ?? [];
+          const more = call < pages.length;
+          return new Response(
+            JSON.stringify({
+              items: page.map((id) => ({ contentDetails: { videoId: id } })),
+              ...(more ? { nextPageToken: `p${call}` } : {}),
+            }),
+            { status: 200 },
+          );
+        }
+        const ids = new URL(url).searchParams.get('id')!.split(',');
+        return new Response(
+          JSON.stringify({
+            items: ids.map((id) => ({
+              ...video({ id }),
+              contentDetails: { duration: 'PT20M' },
+            })),
+          }),
+          { status: 200 },
+        );
+      }),
+    );
+  }
+
+  const page = (n: number, from: number) =>
+    Array.from({ length: n }, (_, i) => `vid-${from + i}`);
+
+  it('follows pagination past the single-page ceiling', async () => {
+    // The bug this fixes: half the lineup sat truncated at one page, with
+    // hundreds of videos never seen.
+    paged([page(50, 0), page(50, 50), page(20, 100)]);
+
+    const observations = await connector().fetchBackfill!(channel());
+    expect(observations).toHaveLength(120);
+  });
+
+  it('costs two units per fifty videos, and no more', async () => {
+    paged([page(50, 0), page(50, 50), page(20, 100)]);
+    const quota = new MemoryQuotaLedger();
+
+    await connector(quota).fetchBackfill!(channel());
+
+    // 3 playlist pages + 3 video batches.
+    expect(quota.spent()).toBe(6);
+  });
+
+  it('stops when the catalogue runs out before the depth does', async () => {
+    paged([page(12, 0)]);
+    const quota = new MemoryQuotaLedger();
+
+    const observations = await connector(quota).fetchBackfill!(channel());
+
+    expect(observations).toHaveLength(12);
+    expect(quota.spent()).toBe(2);
+  });
+
+  it('leaves the recurring pass shallow', async () => {
+    // Only the newest page can have changed, so the ordinary pass must not
+    // paginate — that is what keeps the daily cost flat.
+    const { calls } = mockYouTube({
+      playlistItems: { items: [{ contentDetails: { videoId: 'vid-1' } }], nextPageToken: 'more' },
+      videos: { items: [] },
+    });
+
+    await connector().fetchSchedule(channel());
+
+    expect(calls.filter((c) => c.includes('/playlistItems?'))).toHaveLength(1);
+  });
+});
+
 describe('discovery', () => {
   it('reads the derived uploads playlist, not a search', async () => {
     const { calls } = mockYouTube({

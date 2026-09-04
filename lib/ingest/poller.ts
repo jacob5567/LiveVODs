@@ -10,7 +10,7 @@
 import { and, eq } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { channels, channelSyncState, subjectChannels, type Platform } from '@/drizzle/schema';
-import type { ChannelRef, Connector } from '@/lib/connectors/types';
+import type { ChannelRef, Connector, QuotaLedger } from '@/lib/connectors/types';
 import { QuotaExhaustedError } from '@/lib/connectors/youtube';
 import type { Observation } from './reconcile';
 import { reconcile } from './reconcile';
@@ -19,6 +19,7 @@ import { applyWrites, loadWatchRefs, loadWorkingSet } from './persist';
 export const LIVE_INTERVAL_MS = 60_000;
 export const SCHEDULE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 export const VOD_INTERVAL_MS = 60 * 60 * 1000;
+export const BACKFILL_INTERVAL_MS = 5 * 60 * 1000;
 
 /** Spacing between per-channel requests, so a big lineup does not burst. */
 const REQUEST_SPACING_MS = 120;
@@ -34,6 +35,18 @@ const REQUEST_SPACING_MS = 120;
  * comes round roughly hourly, which is ample for noticing a new upload.
  */
 const DISCOVERY_BATCH = 30;
+
+/** Channels whose back catalogue is collected per backfill pass. */
+const BACKFILL_BATCH = 3;
+
+/**
+ * Backfill stops here and leaves the rest of the budget to ordinary ingest.
+ *
+ * It is a one-off job worth thousands of units, and finishing a day earlier is
+ * worth far less than the guide going stale because the daily quota was spent
+ * collecting history nobody had asked to see yet.
+ */
+const BACKFILL_QUOTA_FLOOR = 4_000;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -174,6 +187,59 @@ export const runScheduleTick = (c: Connector) =>
 export const runVodTick = (c: Connector) => runPerChannel(c, 'vod', (ch) => c.fetchRecentVods(ch));
 
 /**
+ * Collects the back catalogue of channels that have never had one, a few at a
+ * time. A catalogue does not change, so each channel is done once and then
+ * left to the ordinary pass, which only ever looks at the newest page.
+ */
+export async function runBackfillTick(
+  connector: Connector,
+  quota: QuotaLedger,
+): Promise<void> {
+  if (!connector.fetchBackfill) return;
+  if (quota.remaining() < BACKFILL_QUOTA_FLOOR) return;
+
+  const done = new Set(
+    db
+      .select()
+      .from(channelSyncState)
+      .all()
+      .filter((r) => r.backfilledAt !== null)
+      .map((r) => r.channelId),
+  );
+
+  const pending = enabledChannels(connector.platform).filter((c) => !done.has(c.id));
+  if (pending.length === 0) return;
+
+  let collected = 0;
+  for (const channel of pending.slice(0, BACKFILL_BATCH)) {
+    if (quota.remaining() < BACKFILL_QUOTA_FLOOR) break;
+    const now = new Date();
+    try {
+      const result = commit(await connector.fetchBackfill(channel), [channel.id], now);
+      collected += result.inserted;
+
+      db.insert(channelSyncState)
+        .values({ channelId: channel.id, backfilledAt: now })
+        .onConflictDoUpdate({
+          target: channelSyncState.channelId,
+          set: { backfilledAt: now },
+        })
+        .run();
+    } catch (error) {
+      if (error instanceof QuotaExhaustedError) break;
+      console.warn(`[${connector.platform}] backfill failed for ${channel.login}:`, error);
+    }
+    await sleep(REQUEST_SPACING_MS);
+  }
+
+  console.log(
+    `[${connector.platform}] backfill: +${collected} programmes, ` +
+      `${pending.length - Math.min(BACKFILL_BATCH, pending.length)} channels still to do, ` +
+      `${quota.remaining()} units left`,
+  );
+}
+
+/**
  * A tick that never overlaps itself and never lets a rejection kill the loop.
  * setInterval alone would stack passes if one runs long.
  */
@@ -205,7 +271,7 @@ function everyMs(label: string, intervalMs: number, task: () => Promise<void>): 
   };
 }
 
-export function startPoller(connectors: Connector[]): () => void {
+export function startPoller(connectors: Connector[], quota?: QuotaLedger): () => void {
   const stops: Array<() => void> = [];
 
   for (const connector of connectors) {
@@ -220,6 +286,14 @@ export function startPoller(connectors: Connector[]): () => void {
       ),
       everyMs(`${connector.platform}:vod`, VOD_INTERVAL_MS, () => runVodTick(connector)),
     );
+
+    if (connector.fetchBackfill && quota) {
+      stops.push(
+        everyMs(`${connector.platform}:backfill`, BACKFILL_INTERVAL_MS, () =>
+          runBackfillTick(connector, quota),
+        ),
+      );
+    }
   }
 
   return () => stops.forEach((stop) => stop());

@@ -66,6 +66,12 @@ export interface Connector {
 
   /** Recently finished broadcasts, used to backfill exact durations. */
   fetchRecentVods(channel: ChannelRef): Promise<Observation[]>;
+
+  /**
+   * The channel's whole back catalogue, fetched once. Optional: Twitch expires
+   * its VODs after weeks, so there is no deep history there to collect.
+   */
+  fetchBackfill?(channel: ChannelRef): Promise<Observation[]>;
 }
 
 /** Split a list into chunks, for endpoints that accept N ids per request. */

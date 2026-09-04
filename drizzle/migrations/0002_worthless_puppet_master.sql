@@ -1,0 +1,1 @@
+ALTER TABLE `channel_sync_state` ADD `backfilled_at` integer;

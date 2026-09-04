@@ -44,7 +44,7 @@ async function main(): Promise<void> {
         : ''),
   );
 
-  const stop = startPoller(connectors);
+  const stop = startPoller(connectors, quota);
 
   let shuttingDown = false;
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {

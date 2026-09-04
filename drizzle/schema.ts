@@ -134,6 +134,12 @@ export const channelSyncState = sqliteTable('channel_sync_state', {
   lastLiveCheckAt: integer('last_live_check_at', { mode: 'timestamp_ms' }),
   lastScheduleSyncAt: integer('last_schedule_sync_at', { mode: 'timestamp_ms' }),
   lastVodSyncAt: integer('last_vod_sync_at', { mode: 'timestamp_ms' }),
+  /**
+   * When this channel's back catalogue was fetched in depth. A catalogue is
+   * static, so this happens once; the recurring pass only looks at the newest
+   * page, which is all that can have changed.
+   */
+  backfilledAt: integer('backfilled_at', { mode: 'timestamp_ms' }),
   /** YouTube uploads playlist id — derived once, then cached forever (saves a unit per poll). */
   youtubeUploadsPlaylistId: text('youtube_uploads_playlist_id'),
   websubExpiresAt: integer('websub_expires_at', { mode: 'timestamp_ms' }),

@@ -38,11 +38,24 @@ const COST = { channels: 1, playlistItems: 1, videos: 1 } as const;
 const DISCOVERY_DEPTH = 50;
 
 /**
- * YouTube discovery has to run far more often than Twitch's, because it is the
- * only way a new broadcast is noticed at all — there is no cheap "is this
- * channel live" endpoint.
+ * How far back a one-time backfill reaches.
+ *
+ * A back catalogue does not change, so paginating it deeply is a cost paid
+ * once — two units per fifty videos — while the recurring pass keeps looking
+ * only at the newest page. Without this the library was capped at whatever one
+ * page returned, and half the lineup sat truncated at fifty videos with
+ * hundreds more never seen.
  */
-const DISCOVERY_INTERVAL_MS = 15 * 60 * 1000;
+export const BACKFILL_DEPTH = 1000;
+
+/**
+ * YouTube discovery still runs far more often than Twitch's, because it is the
+ * only way a new broadcast is noticed at all — there is no cheap "is this
+ * channel live" endpoint. Hourly rather than every quarter hour, since a
+ * channel's back catalogue is collected once by the backfill pass and only the
+ * newest page can have changed since.
+ */
+const DISCOVERY_INTERVAL_MS = 60 * 60 * 1000;
 
 interface YouTubeChannel {
   id: string;
@@ -76,6 +89,7 @@ interface YouTubeVideo {
 
 interface ListResponse<T> {
   items?: T[];
+  nextPageToken?: string;
 }
 
 export class YouTubeApiError extends Error {
@@ -225,22 +239,56 @@ export class YouTubeConnector implements Connector {
    * already tracked.
    */
   async fetchSchedule(channel: ChannelRef): Promise<Observation[]> {
+    // One page, always. Only the newest page can have changed since the
+    // backfill, and pagination here is what made the daily cost grow.
+    return this.readUploads(channel, DISCOVERY_DEPTH, 1);
+  }
+
+  /**
+   * The whole back catalogue, or as much of it as BACKFILL_DEPTH allows. Run
+   * once per channel: what it returns cannot change afterwards.
+   */
+  async fetchBackfill(channel: ChannelRef): Promise<Observation[]> {
+    return this.readUploads(channel, BACKFILL_DEPTH, Math.ceil(BACKFILL_DEPTH / 50));
+  }
+
+  private async readUploads(
+    channel: ChannelRef,
+    want: number,
+    maxPages: number,
+  ): Promise<Observation[]> {
     const playlistId = uploadsPlaylistId(channel.platformChannelId);
     if (!playlistId) return [];
 
-    const params = new URLSearchParams({
-      part: 'contentDetails',
-      playlistId,
-      maxResults: String(DISCOVERY_DEPTH),
-    });
+    const videoIds: string[] = [];
+    let pageToken: string | undefined;
+    let pages = 0;
 
-    const body = await this.get<ListResponse<PlaylistItem>>(
-      'playlistItems',
-      params,
-      COST.playlistItems,
-    );
+    while (videoIds.length < want && pages < maxPages) {
+      pages += 1;
+      const params = new URLSearchParams({
+        part: 'contentDetails',
+        playlistId,
+        maxResults: String(Math.min(50, want - videoIds.length)),
+      });
+      if (pageToken) params.set('pageToken', pageToken);
 
-    const videoIds = (body?.items ?? []).map((i) => i.contentDetails.videoId).filter(Boolean);
+      const body = await this.get<ListResponse<PlaylistItem>>(
+        'playlistItems',
+        params,
+        COST.playlistItems,
+      );
+      if (!body) break;
+
+      for (const item of body.items ?? []) {
+        if (item.contentDetails?.videoId) videoIds.push(item.contentDetails.videoId);
+      }
+
+      pageToken = body.nextPageToken;
+      // The catalogue ran out before the depth did.
+      if (!pageToken || (body.items ?? []).length === 0) break;
+    }
+
     if (videoIds.length === 0) return [];
 
     const videos = await this.fetchVideos(videoIds);
