@@ -67,16 +67,20 @@ committed template.
 
 ```yaml
 subjects:
+  - name: Tech
+    youtube:
+      - "@mkbhd"              # handle, as in youtube.com/@<handle>
+
+  - name: Making & Science
+    youtube:
+      - "@tested"
+      - "@tomscottgo"
+
   - name: Speedrunning
     twitch:
       - GamesDoneQuick        # login, as in twitch.tv/<login>
-      - SimpleFlips
     youtube:
-      - "@SimpleFlips"        # handle, as in youtube.com/@<handle>
-
-  - name: Coffee
-    youtube:
-      - "@jameshoffmann"
+      - "@smallant"
 ```
 
 - Each subject is **one row**, in the order written here.
