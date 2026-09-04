@@ -16,6 +16,8 @@ type Mod = {
   programs: typeof import('@/drizzle/schema')['programs'];
   loadGuideWindow: typeof import('./guide')['loadGuideWindow'];
   guideRevision: typeof import('./guide')['guideRevision'];
+  parseGuideWindow: typeof import('./guide')['parseGuideWindow'];
+  MAX_GUIDE_SPAN_MS: typeof import('./guide')['MAX_GUIDE_SPAN_MS'];
 };
 
 const m = {} as Mod;
@@ -41,6 +43,8 @@ beforeAll(async () => {
     programs: schema.programs,
     loadGuideWindow: guide.loadGuideWindow,
     guideRevision: guide.guideRevision,
+    parseGuideWindow: guide.parseGuideWindow,
+    MAX_GUIDE_SPAN_MS: guide.MAX_GUIDE_SPAN_MS,
   });
 
   migrate(m.db, { migrationsFolder: './drizzle/migrations' });
@@ -300,5 +304,69 @@ describe('guideRevision', () => {
 
   it('survives an empty table', () => {
     expect(m.guideRevision()).toBe('0:0');
+  });
+});
+
+describe('parseGuideWindow', () => {
+  const NOW_FIXED = new Date('2026-09-04T12:00:00.000Z');
+
+  it('falls back to the window around now when no bounds are given', () => {
+    const result = m.parseGuideWindow(null, null, NOW_FIXED);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.from).toBeLessThan(NOW_FIXED.getTime());
+    expect(result.to).toBeGreaterThan(NOW_FIXED.getTime());
+  });
+
+  it('accepts the window the guide itself handed out', () => {
+    const from = NOW_FIXED.getTime() - 4 * 60 * 60_000;
+    const to = NOW_FIXED.getTime() + 12 * 60 * 60_000;
+
+    expect(m.parseGuideWindow(String(from), String(to), NOW_FIXED)).toEqual({
+      ok: true,
+      from,
+      to,
+    });
+  });
+
+  /**
+   * Programming is linear in the days a window spans and runs synchronously on
+   * the request thread, so an unbounded `to` was an unauthenticated way to
+   * allocate millions of placements and block the process until it ran out of
+   * memory. A hundred-year window has to be refused outright.
+   */
+  it('refuses a window wider than the maximum span', () => {
+    const from = NOW_FIXED.getTime();
+    const century = from + 100 * 365 * 24 * 60 * 60_000;
+
+    expect(m.parseGuideWindow(String(from), String(century), NOW_FIXED).ok).toBe(false);
+    // The largest representable date must not slip through either.
+    expect(m.parseGuideWindow('1', '8640000000000000', NOW_FIXED).ok).toBe(false);
+  });
+
+  it('allows a window exactly at the limit but not one past it', () => {
+    const from = NOW_FIXED.getTime();
+
+    expect(m.parseGuideWindow(String(from), String(from + m.MAX_GUIDE_SPAN_MS), NOW_FIXED).ok).toBe(
+      true,
+    );
+    expect(
+      m.parseGuideWindow(String(from), String(from + m.MAX_GUIDE_SPAN_MS + 1), NOW_FIXED).ok,
+    ).toBe(false);
+  });
+
+  it('treats unparseable bounds as absent rather than failing the request', () => {
+    // A bare or broken request still renders a guide; only a well-formed but
+    // oversized window is an error worth reporting.
+    for (const [from, to] of [
+      ['nonsense', 'also-nonsense'],
+      ['0', '0'],
+      ['500', '400'],
+      ['-1', '1000'],
+      ['1e400', '1e400'],
+    ]) {
+      expect(m.parseGuideWindow(from, to, NOW_FIXED).ok).toBe(true);
+    }
   });
 });

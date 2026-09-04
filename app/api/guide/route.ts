@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { loadGuide, loadGuideWindow } from '@/lib/guide';
+import { loadGuideWindow, parseGuideWindow } from '@/lib/guide';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,17 +9,17 @@ export const dynamic = 'force-dynamic';
  * change.
  *
  * `from` and `to` are epoch milliseconds. The client passes back the window it
- * already has so an update does not shift the time axis under the viewer.
+ * already has so an update does not shift the time axis under the viewer. The
+ * span is bounded — see parseGuideWindow.
  */
 export function GET(request: Request) {
   const params = new URL(request.url).searchParams;
-  const from = Number(params.get('from'));
-  const to = Number(params.get('to'));
+  const requested = parseGuideWindow(params.get('from'), params.get('to'));
 
-  const guide =
-    Number.isFinite(from) && Number.isFinite(to) && from > 0 && to > from
-      ? loadGuideWindow(new Date(from), new Date(to))
-      : loadGuide();
+  if (!requested.ok) {
+    return NextResponse.json({ error: requested.reason }, { status: 400 });
+  }
 
+  const guide = loadGuideWindow(new Date(requested.from), new Date(requested.to));
   return NextResponse.json(guide, { headers: { 'Cache-Control': 'no-store' } });
 }

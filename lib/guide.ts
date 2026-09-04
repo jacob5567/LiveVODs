@@ -16,6 +16,70 @@ export const GUIDE_PAST_MS = 4 * HOUR_MS;
 export const GUIDE_FUTURE_MS = 12 * HOUR_MS;
 
 /**
+ * Longest window the guide will programme in one request.
+ *
+ * Programming is linear in the number of days it spans and runs synchronously
+ * on the request thread, so an unbounded `to` is an unauthenticated way to
+ * allocate millions of placements and block every other request until the
+ * process runs out of memory. The only legitimate caller echoes back the window
+ * the server itself sent, so this only has to be comfortably wider than that.
+ */
+export const MAX_GUIDE_SPAN_MS = 48 * HOUR_MS;
+
+/** Outside this a value is not a representable Date. */
+const MAX_TIMESTAMP_MS = 8.64e15;
+
+export type WindowRequest =
+  | { ok: true; from: number; to: number }
+  | { ok: false; reason: string };
+
+/**
+ * Resolves the window a request is asking for.
+ *
+ * Absent or unparseable parameters fall back to the default window around now,
+ * which is what makes a bare GET /api/guide useful. A window that is present
+ * but out of range is refused rather than clamped: nothing legitimate sends
+ * one, so answering a different question than the one asked would only hide
+ * the caller's bug.
+ *
+ * Pure, so the bound can be tested without a database.
+ */
+export function parseGuideWindow(
+  fromParam: string | null,
+  toParam: string | null,
+  now: Date = new Date(),
+): WindowRequest {
+  const nowMs = now.getTime();
+  const fallback = {
+    ok: true as const,
+    from: nowMs - GUIDE_PAST_MS,
+    to: nowMs + GUIDE_FUTURE_MS,
+  };
+
+  if (fromParam === null && toParam === null) return fallback;
+
+  const from = Number(fromParam);
+  const to = Number(toParam);
+
+  const usable =
+    Number.isFinite(from) &&
+    Number.isFinite(to) &&
+    from > 0 &&
+    to > from &&
+    Math.abs(from) <= MAX_TIMESTAMP_MS &&
+    Math.abs(to) <= MAX_TIMESTAMP_MS;
+
+  // Malformed rather than merely wide: treat it as if it had not been sent.
+  if (!usable) return fallback;
+
+  if (to - from > MAX_GUIDE_SPAN_MS) {
+    return { ok: false, reason: `Window exceeds the maximum of ${MAX_GUIDE_SPAN_MS} ms` };
+  }
+
+  return { ok: true, from, to };
+}
+
+/**
  * Most recent library items considered per subject. Enough to programme a day
  * without variety suffering, and it stops a subject with years of back
  * catalogue loading all of it on every request.
