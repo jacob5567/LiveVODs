@@ -9,7 +9,7 @@ import {
   type ProgramState,
 } from '@/drizzle/schema';
 import { HOUR_MS, LIVE_LEAD_MS } from '@/lib/time';
-import { dayBounds, programmeWindow, type Appointment, type LibraryItem } from '@/lib/schedule';
+import { broadcastDayBounds, programmeWindow, type Appointment, type LibraryItem } from '@/lib/schedule';
 import { assignSeries, type SeriesInput } from '@/lib/series';
 
 /** How far back and forward the guide loads around "now". */
@@ -207,8 +207,8 @@ export function loadGuideWindow(from: Date, to: Date, now: Date = new Date()): G
 
   // Days are programmed whole, so appointments are needed for every day the
   // window touches, not merely the window itself.
-  const spanStart = dayBounds(fromMs).start;
-  const spanEnd = dayBounds(toMs).end;
+  const spanStart = broadcastDayBounds(fromMs).start;
+  const spanEnd = broadcastDayBounds(toMs).end;
 
   const out: GuideSubject[] = [];
 

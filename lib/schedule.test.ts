@@ -3,7 +3,7 @@ import {
   BLOCK_MAX_RECORDINGS,
   MAX_SLOT_MS,
   MIN_SLOT_MS,
-  dayBounds,
+  broadcastDayBounds,
   programmeDay,
   programmeWindow,
   type Appointment,
@@ -14,7 +14,7 @@ const MIN = 60_000;
 const HOUR = 60 * MIN;
 
 /** Local midnight, since the scheduler programmes local days. */
-const DAY = dayBounds(Date.parse('2026-09-02T12:00:00')).start;
+const DAY = broadcastDayBounds(Date.parse('2026-09-02T12:00:00')).start;
 const at = (hours: number) => DAY + hours * HOUR;
 
 const item = (programId: number, minutes: number): LibraryItem => ({
@@ -103,11 +103,13 @@ describe('filling gaps', () => {
     }
   });
 
-  it('stays inside the day', () => {
-    const { start, end } = dayBounds(DAY);
+  it('starts inside the day and never runs far past its end', () => {
+    const { start, end } = broadcastDayBounds(DAY);
     for (const placement of day(1, DAY, [], library(40))) {
       expect(placement.startsAt).toBeGreaterThanOrEqual(start);
-      expect(placement.endsAt).toBeLessThanOrEqual(end);
+      // Programming crosses the turnover rather than stopping short of it —
+      // that is what removes the seam — but it is still bounded.
+      expect(placement.endsAt).toBeLessThanOrEqual(end + MAX_SLOT_MS);
     }
   });
 

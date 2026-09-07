@@ -297,12 +297,38 @@ function itemAt(
   return order[index % length];
 }
 
-/** Local-midnight boundaries of the day containing `ms`. */
-export function dayBounds(ms: number): { start: number; end: number } {
+/**
+ * When a programming day turns over.
+ *
+ * Television does not reset at midnight. The broadcast day runs from early
+ * morning, and the small hours belong to the night before — which is why a
+ * show at 1am is billed as Tuesday's late film rather than Wednesday's first
+ * programme.
+ *
+ * It matters here because a day boundary is the one place a row can be left
+ * with dead air: programming stops there and resumes on the far side. At
+ * midnight that seam sits in the middle of the evening. At six it sits where
+ * the fewest people are watching.
+ */
+export const BROADCAST_DAY_START_HOUR = 6;
+
+/**
+ * Boundaries of the broadcast day containing `ms`.
+ *
+ * Note this is not the calendar day: 2am on Wednesday belongs to the broadcast
+ * day that began at 6am on Tuesday.
+ */
+export function broadcastDayBounds(ms: number): { start: number; end: number } {
   const start = new Date(ms);
-  start.setHours(0, 0, 0, 0);
+  start.setHours(BROADCAST_DAY_START_HOUR, 0, 0, 0);
+  // Before the turnover, so this instant still belongs to yesterday's day.
+  if (start.getTime() > ms) start.setDate(start.getDate() - 1);
+
   const end = new Date(start);
+  // setDate rather than adding 24 hours, so the day is still a day across a
+  // daylight-saving change.
   end.setDate(end.getDate() + 1);
+
   return { start: start.getTime(), end: end.getTime() };
 }
 
@@ -343,7 +369,7 @@ export function programmeDay(
   chain: Chain = { cursorMs: 0, index: 0, deferred: [] },
   cache: Map<number, Playable[]> = new Map(),
 ): { placements: Placement[]; chain: Chain } {
-  const { start, end } = dayBounds(dayStartMs);
+  const { start, end } = broadcastDayBounds(dayStartMs);
 
   const fixed = resolveOverlaps(
     appointments.filter((a) => a.endsAt > start && a.startsAt < end),
@@ -427,7 +453,17 @@ export function programmeDay(
     let at = gapStart;
     let skipped = 0;
 
-    while (gapEnd - at >= MIN_SLOT_MS) {
+    /**
+     * Filled up to the ceiling, not up to the gap.
+     *
+     * For every gap but the last these are the same. For the one that runs to
+     * the turnover they are not, and the difference is the seam: stopping at
+     * the gap meant that once less than a slot remained before it, the loop
+     * gave up without ever offering the overrun anything — so the row went
+     * quiet for those last few minutes and resumed on the far side. That
+     * happened once a row a day.
+     */
+    while (ceiling - at >= MIN_SLOT_MS) {
       /**
        * Whatever has been waiting longest gets first refusal on this gap.
        * Taking the first that fits, rather than the best fit, is what keeps
@@ -496,13 +532,13 @@ export function programmeWindow(
   // An appointment spanning midnight belongs to both days; it is placed once.
   const placedAppointments = new Set<number>();
 
-  const firstDay = dayBounds(
-    dayBounds(fromMs).start - CHAIN_LOOKBACK_DAYS * 24 * 60 * 60_000,
+  const firstDay = broadcastDayBounds(
+    broadcastDayBounds(fromMs).start - CHAIN_LOOKBACK_DAYS * 24 * 60 * 60_000,
   ).start;
 
   let chain: Chain = { cursorMs: firstDay, index: 0, deferred: [] };
 
-  for (let day = firstDay; day < toMs; day = dayBounds(day).end) {
+  for (let day = firstDay; day < toMs; day = broadcastDayBounds(day).end) {
     const result = programmeDay(subjectId, day, appointments, library, chain, cache);
     chain = result.chain;
 

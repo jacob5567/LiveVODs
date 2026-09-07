@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { MINUTE_MS } from '@/lib/time';
-import { dayBounds } from '@/lib/schedule';
+import { broadcastDayBounds } from '@/lib/schedule';
 
 // Must be set before lib/db is imported: it resolves the path at module load.
 process.env.DATABASE_PATH = join(mkdtempSync(join(tmpdir(), 'livevods-guide-')), 'test.db');
@@ -22,8 +22,13 @@ type Mod = {
 
 const m = {} as Mod;
 
-/** Midday local, so a ±few-hour window stays inside one programming day. */
-const NOW = new Date(dayBounds(Date.parse('2026-09-02T12:00:00')).start + 12 * 60 * MINUTE_MS);
+/**
+ * Midday local, so a ±few-hour window stays inside one programming day. The
+ * broadcast day turns over at six, so midday is six hours into it.
+ */
+const NOW = new Date(
+  broadcastDayBounds(Date.parse('2026-09-02T12:00:00')).start + 6 * 60 * MINUTE_MS,
+);
 const at = (minutes: number) => new Date(NOW.getTime() + minutes * MINUTE_MS);
 
 let channelId: number;
