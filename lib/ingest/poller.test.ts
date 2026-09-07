@@ -513,3 +513,88 @@ describe('series ingestion', () => {
     expect(called).toBe(0);
   });
 });
+
+describe('retiring YouTube livestreams', () => {
+  it('deletes a broadcast left in progress rather than airing it', async () => {
+    const { dropYouTubeLiveBroadcasts } = await import('./persist');
+
+    const [yt] = m.db
+      .insert(m.channels)
+      .values({
+        platform: 'youtube',
+        platformChannelId: 'UC-loop',
+        login: '@loop',
+        displayName: 'Loop',
+        enabled: true,
+      })
+      .returning({ id: m.channels.id })
+      .all();
+
+    // A perpetual stream: started long ago, still going. Marking it aired
+    // would put a recording of that length into the library.
+    const [perpetual] = m.db
+      .insert(m.programs)
+      .values({
+        channelId: yt.id,
+        platformRef: 'loop-vid',
+        title: 'Every Episode Streamed 24/7',
+        startsAt: new Date(Date.now() - 700 * 24 * 60 * 60_000),
+        endsAt: new Date(),
+        endsAtProvisional: true,
+        state: 'live',
+        canonicalUrl: 'https://youtu.be/loop-vid',
+        isUpload: false,
+      })
+      .returning({ id: m.programs.id })
+      .all();
+
+    // A premiere on the same channel must survive: it is scheduled, never live.
+    const [premiere] = m.db
+      .insert(m.programs)
+      .values({
+        channelId: yt.id,
+        platformRef: 'premiere-vid',
+        title: 'The Premiere',
+        startsAt: new Date(Date.now() + 3600_000),
+        endsAt: new Date(Date.now() + 3600_000 + 15 * 60_000),
+        state: 'scheduled',
+        canonicalUrl: 'https://youtu.be/premiere-vid',
+        isUpload: false,
+      })
+      .returning({ id: m.programs.id })
+      .all();
+
+    expect(dropYouTubeLiveBroadcasts()).toBe(1);
+    expect(m.db.select().from(m.programs).where(eqId(m.programs.id, perpetual.id)).get()).toBeUndefined();
+    expect(m.db.select().from(m.programs).where(eqId(m.programs.id, premiere.id)).get()).toBeDefined();
+
+    // Idempotent: nothing creates these any more, so a second run is a no-op.
+    expect(dropYouTubeLiveBroadcasts()).toBe(0);
+
+    m.db.delete(m.channels).where(eqId(m.channels.id, yt.id)).run();
+  });
+
+  it('leaves a Twitch broadcast alone', async () => {
+    const { dropYouTubeLiveBroadcasts } = await import('./persist');
+    const live = m.db
+      .insert(m.programs)
+      .values({
+        channelId,
+        platformRef: 'twitch-live',
+        title: 'Streaming now',
+        startsAt: new Date(Date.now() - 3600_000),
+        endsAt: new Date(),
+        endsAtProvisional: true,
+        state: 'live',
+        canonicalUrl: 'https://twitch.tv/alice',
+        isUpload: false,
+      })
+      .returning({ id: m.programs.id })
+      .all()[0].id;
+
+    dropYouTubeLiveBroadcasts();
+
+    expect(m.db.select().from(m.programs).where(eqId(m.programs.id, live)).get()).toBeDefined();
+    m.db.delete(m.programs).where(eqId(m.programs.id, live)).run();
+  });
+});

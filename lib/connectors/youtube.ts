@@ -255,13 +255,12 @@ export class YouTubeConnector implements Connector {
     const videos = await this.fetchVideos(refs);
     const observations = this.toObservations(videos, byPlatformId);
 
-    const liveChannelIds = new Set(
-      observations.filter((o) => o.kind === 'live').map((o) => o.channelId),
-    );
+    // No YouTube channel is ever broadcasting as far as the guide is
+    // concerned, so every channel polled is offline. The pass still earns its
+    // keep: it is what notices a premiere finishing and turns it into a
+    // recording, and what closes any live row left over from before.
     for (const channel of channels) {
-      if (!liveChannelIds.has(channel.id)) {
-        observations.push({ kind: 'offline', channelId: channel.id });
-      }
+      observations.push({ kind: 'offline', channelId: channel.id });
     }
 
     return observations;
@@ -488,32 +487,32 @@ export class YouTubeConnector implements Connector {
         continue;
       }
 
-      if (video.snippet.liveBroadcastContent === 'live' && details.actualStartTime) {
-        observations.push({
-          kind: 'live',
-          ...common,
-          category: null,
-          startedAt: new Date(details.actualStartTime),
-        });
-        continue;
-      }
+      // A YouTube broadcast in progress is deliberately not programmed. Many
+      // are perpetual — a 24/7 loop reports a start date years back and no
+      // end, so it lands on the grid as a single bar days or months wide and
+      // holds the row against everything else. Twitch streams keep their live
+      // treatment; there a broadcast is a session with an end.
+      if (video.snippet.liveBroadcastContent === 'live') continue;
 
       if (details.scheduledStartTime) {
-        const startsAt = new Date(details.scheduledStartTime);
         /**
-         * A premiere is a finished video with an air date, so its real length
-         * is already known and the slot should be exactly that long. A
-         * scheduled livestream has no file yet and reports P0D — there the
-         * reconciler's default slot is the best guess available.
+         * The one thing that separates the two kinds of announced broadcast.
+         *
+         * A premiere is a finished video with an air date: the file exists, so
+         * it reports a real duration and is programmed at exactly that length.
+         * A livestream has nothing recorded yet and reports P0D — and since
+         * YouTube livestreams are not programmed, that is where it ends.
          */
         const durationMs = parseIsoDuration(video.contentDetails?.duration);
+        if (durationMs <= 0) continue;
 
+        const startsAt = new Date(details.scheduledStartTime);
         observations.push({
           kind: 'scheduled',
           ...common,
           category: null,
           startsAt,
-          endsAt: durationMs > 0 ? new Date(startsAt.getTime() + durationMs) : null,
+          endsAt: new Date(startsAt.getTime() + durationMs),
         });
       }
     }

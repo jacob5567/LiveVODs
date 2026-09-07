@@ -8,7 +8,6 @@ import {
 } from './youtube';
 import type { ChannelRef } from './types';
 import type {
-  LiveObservation,
   ScheduledObservation,
   VodObservation,
 } from '@/lib/ingest/reconcile';
@@ -157,7 +156,10 @@ describe('quota discipline', () => {
 });
 
 describe('mapping videos to observations', () => {
-  it('maps a running broadcast to live', async () => {
+  it('does not programme a broadcast that is in progress', async () => {
+    // Many YouTube livestreams are perpetual. A 24/7 loop reports a start date
+    // years back and no end, so as an appointment it becomes a single bar
+    // months wide that holds the row against everything else.
     mockYouTube({
       videos: {
         items: [
@@ -170,21 +172,23 @@ describe('mapping videos to observations', () => {
     });
 
     const observations = await connector().fetchLive([channel({ watchRefs: ['vid-1'] })]);
-    const live = observations.find((o) => o.kind === 'live') as LiveObservation;
 
-    expect(live).toMatchObject({ channelId: 1, platformRef: 'vid-1' });
-    expect(live.startedAt).toEqual(new Date('2026-09-01T19:00:00Z'));
-    expect(observations.some((o) => o.kind === 'offline')).toBe(false);
+    expect(observations.some((o) => o.kind === 'live')).toBe(false);
+    // The channel is reported offline, which is what closes any live row left
+    // over from when these were programmed.
+    expect(observations.some((o) => o.kind === 'offline')).toBe(true);
   });
 
-  it('gives a scheduled livestream no end time, because it has no file yet', async () => {
+  it('does not programme a livestream that has only been announced', async () => {
     mockYouTube({
       playlistItems: { items: [{ contentDetails: { videoId: 'vid-1' } }] },
       videos: {
         items: [
           video({
             snippet: { ...video().snippet, liveBroadcastContent: 'upcoming' },
-            // P0D is what YouTube reports for a broadcast that has not happened.
+            // P0D is what YouTube reports for a broadcast that has not
+            // happened, and it is the only thing separating one from a
+            // premiere, whose file already exists.
             contentDetails: { duration: 'P0D' },
             liveStreamingDetails: { scheduledStartTime: '2026-09-02T19:00:00Z' },
           }),
@@ -192,11 +196,7 @@ describe('mapping videos to observations', () => {
       },
     });
 
-    const [obs] = (await connector().fetchSchedule(channel())) as ScheduledObservation[];
-
-    expect(obs.startsAt).toEqual(new Date('2026-09-02T19:00:00Z'));
-    // Nobody knows how long it will run, so the reconciler supplies its default.
-    expect(obs.endsAt).toBeNull();
+    expect(await connector().fetchSchedule(channel())).toEqual([]);
   });
 
   it('sizes a premiere by its real length rather than the default slot', async () => {
@@ -282,23 +282,27 @@ describe('mapping videos to observations', () => {
     expect(observations[0].platformRef).toBe('vid-2');
   });
 
-  it('still keeps a short broadcast, which is not a Short', async () => {
-    // A live stream that only ran a few minutes is a real broadcast at a real
-    // time, so it is an appointment rather than library fill.
+  it('keeps a finished broadcast however short it ran', async () => {
+    // The Shorts filter guards ordinary uploads, where length is the only
+    // signal. A broadcast that happened is a recording of a real event, so it
+    // is library content whatever its length.
     mockYouTube({
+      playlistItems: { items: [{ contentDetails: { videoId: 'vid-1' } }] },
       videos: {
         items: [
           video({
-            snippet: { ...video().snippet, liveBroadcastContent: 'live' },
-            contentDetails: { duration: 'P0D' },
-            liveStreamingDetails: { actualStartTime: '2026-09-01T19:00:00Z' },
+            contentDetails: { duration: 'PT3M' },
+            liveStreamingDetails: {
+              actualStartTime: '2026-09-01T19:00:00Z',
+              actualEndTime: '2026-09-01T19:03:00Z',
+            },
           }),
         ],
       },
     });
 
-    const observations = await connector().fetchLive([channel({ watchRefs: ['vid-1'] })]);
-    expect(observations.some((o) => o.kind === 'live')).toBe(true);
+    const observations = await connector().fetchSchedule(channel());
+    expect(observations.some((o) => o.kind === 'vod')).toBe(true);
   });
 
   it('asks for the full page of uploads the endpoint allows', async () => {

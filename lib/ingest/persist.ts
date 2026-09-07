@@ -204,6 +204,33 @@ export function closeUntrackedPrograms(now: Date = new Date()): number {
   return ended.changes;
 }
 
+/**
+ * Removes YouTube broadcasts left in progress from when they were programmed.
+ *
+ * These cannot be closed the ordinary way. An offline observation would mark
+ * one aired and keep its provisional end, which for a perpetual stream is
+ * nonsense — a 24/7 loop had been "on" for 721 days — and it would then sit in
+ * the library as a recording that long, split into hundreds of parts.
+ *
+ * Safe to run on every start: nothing puts a YouTube programme into the live
+ * state any more, so once it has run it does nothing. Premieres are never
+ * touched, because a premiere goes from scheduled straight to aired.
+ */
+export function dropYouTubeLiveBroadcasts(): number {
+  const stale = db
+    .select({ id: programs.id })
+    .from(programs)
+    .innerJoin(channels, eq(channels.id, programs.channelId))
+    .where(and(eq(channels.platform, 'youtube'), eq(programs.state, 'live')))
+    .all()
+    .map((row) => row.id);
+
+  if (stale.length === 0) return 0;
+
+  db.delete(programs).where(inArray(programs.id, stale)).run();
+  return stale.length;
+}
+
 /** Refs per statement, well under any SQLite variable limit. */
 const REF_BATCH = 500;
 

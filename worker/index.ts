@@ -17,7 +17,9 @@ async function main(): Promise<void> {
   const { YouTubeConnector } = await import('@/lib/connectors/youtube');
   const { youtubeLedger } = await import('@/lib/ingest/quota');
   const { startPoller } = await import('@/lib/ingest/poller');
-  const { closeUntrackedPrograms } = await import('@/lib/ingest/persist');
+  const { closeUntrackedPrograms, dropYouTubeLiveBroadcasts } = await import(
+    '@/lib/ingest/persist',
+  );
   const { migrate } = await import('drizzle-orm/better-sqlite3/migrator');
 
   migrate(db, { migrationsFolder: './drizzle/migrations' });
@@ -26,6 +28,11 @@ async function main(): Promise<void> {
   // broadcasts open, and nothing polls it now to close them.
   const closed = closeUntrackedPrograms();
   if (closed > 0) console.log(`closed ${closed} broadcast(s) on channels no longer polled`);
+
+  // YouTube broadcasts are no longer programmed; anything left mid-flight from
+  // when they were has a running time that means nothing.
+  const dropped = dropYouTubeLiveBroadcasts();
+  if (dropped > 0) console.log(`dropped ${dropped} unfinished YouTube livestream(s)`);
 
   const quota = youtubeLedger();
   const connectors = [TwitchConnector.fromEnv(), YouTubeConnector.fromEnv(quota)].filter(
