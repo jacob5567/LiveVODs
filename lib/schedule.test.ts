@@ -123,6 +123,40 @@ describe('filling gaps', () => {
     expect(fills(placed).every((f) => f.programId === 2)).toBe(true);
   });
 
+  it('holds an item too long for one gap and airs it in a wider one', () => {
+    // Two appointments leave an hour between them and the rest of the day
+    // after. The four-hour recording cannot go in the hour, but it must not be
+    // burned for having been offered there — it used to be consumed from the
+    // running order and not come round again for a whole cycle, which is how
+    // long programmes lost their place on any busy row.
+    const placed = day(
+      1,
+      DAY,
+      [appointment(98, 0, 12), appointment(99, 13, 14)],
+      [item(1, 240), item(2, 30)],
+    );
+
+    const aired = fills(placed);
+    const long = aired.filter((f) => f.programId === 1);
+
+    expect(long.length).toBeGreaterThan(0);
+    // And it went after the gap that could not take it, not inside it.
+    expect(long.every((f) => f.startsAt >= at(14))).toBe(true);
+  });
+
+  it('keeps a held item in the running order rather than losing its turn', () => {
+    // One long recording among short ones. Whatever else the day does, the
+    // long one has to appear: deferring is a delay, not a discard.
+    const placed = day(
+      1,
+      DAY,
+      [appointment(98, 9, 10)],
+      [item(1, 300), ...library(8, 20)],
+    );
+
+    expect(fills(placed).some((f) => f.programId === 1)).toBe(true);
+  });
+
   it('never lets an overrun run into the next appointment', () => {
     // The last programme of a day may cross midnight, but not into something
     // that is actually scheduled to be on.

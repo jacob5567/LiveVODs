@@ -50,7 +50,7 @@ export interface Placement {
 }
 
 /** A library item as it will actually be broadcast: whole, or one part of it. */
-interface Playable {
+export interface Playable {
   programId: number;
   durationMs: number;
   offsetMs: number;
@@ -104,6 +104,12 @@ export interface Chain {
   cursorMs: number;
   /** Position in the endless running order. */
   index: number;
+  /**
+   * Items drawn from the running order that no gap has yet been wide enough to
+   * take. They are held here rather than dropped, and get first refusal on
+   * every later gap until one fits.
+   */
+  deferred: Playable[];
 }
 
 /** Gaps shorter than this are left empty rather than filled with a sliver. */
@@ -227,7 +233,7 @@ export function programmeDay(
   dayStartMs: number,
   appointments: Appointment[],
   library: LibraryItem[],
-  chain: Chain = { cursorMs: 0, index: 0 },
+  chain: Chain = { cursorMs: 0, index: 0, deferred: [] },
   cache: Map<number, Playable[]> = new Map(),
 ): { placements: Placement[]; chain: Chain } {
   const { start, end } = dayBounds(dayStartMs);
@@ -257,11 +263,13 @@ export function programmeDay(
   // this one if a programme ran over.
   let cursor = Math.max(start, chain.cursorMs);
   let index = chain.index;
+  // Copied, so programming a day never mutates the chain it was handed.
+  const deferred = [...(chain.deferred ?? [])];
 
   if (playlistLength === 0) {
     return {
       placements: placements.sort((a, b) => a.startsAt - b.startsAt),
-      chain: { cursorMs: cursor, index },
+      chain: { cursorMs: cursor, index, deferred },
     };
   }
 
@@ -282,6 +290,18 @@ export function programmeDay(
     .reduce((soonest, a) => Math.min(soonest, a.startsAt), Number.POSITIVE_INFINITY);
   const overrunLimit = Math.min(nextAppointment, end + MAX_SLOT_MS);
 
+  const broadcast = (item: Playable, at: number) => {
+    placements.push({
+      programId: item.programId,
+      startsAt: at,
+      endsAt: at + item.durationMs,
+      isAppointment: false,
+      offsetMs: item.offsetMs,
+      part: item.part,
+      partCount: item.partCount,
+    });
+  };
+
   for (const [gapStart, gapEnd] of gaps) {
     // Only the gap that runs to midnight may be overrun; one ending at an
     // appointment must not.
@@ -289,26 +309,41 @@ export function programmeDay(
     let at = gapStart;
     let skipped = 0;
 
-    while (gapEnd - at >= MIN_SLOT_MS && skipped < playlistLength) {
+    while (gapEnd - at >= MIN_SLOT_MS) {
+      /**
+       * Whatever has been waiting longest gets first refusal on this gap.
+       * Taking the first that fits, rather than the best fit, is what keeps
+       * the parts of one recording in order: every part is at least as long
+       * as the one before it, so an earlier part can never be passed over in
+       * favour of a later one.
+       */
+      const waiting = deferred.findIndex((held) => at + held.durationMs <= ceiling);
+      if (waiting !== -1) {
+        const [item] = deferred.splice(waiting, 1);
+        broadcast(item, at);
+        at += item.durationMs;
+        continue;
+      }
+
+      // Nothing held fits, and the order has been round once without offering
+      // anything that does. This gap is as full as it is going to get.
+      if (skipped >= playlistLength) break;
+
       const item = itemAt(subjectId, groups, playlistLength, index, cache);
       index += 1;
 
       if (at + item.durationMs > ceiling) {
-        // Too long even allowing for the overrun. Leave it for a wider gap
-        // rather than truncating it — a bar should be the real length.
+        // Too long even allowing for the overrun. Hold it for a gap wide
+        // enough to take it rather than truncating it — a bar should be the
+        // real length — and rather than dropping it, which is what used to
+        // happen: the order moved on and it was not seen again for a whole
+        // cycle. Long programmes lost that race every time a row was busy.
+        if (deferred.length < playlistLength) deferred.push(item);
         skipped += 1;
         continue;
       }
 
-      placements.push({
-        programId: item.programId,
-        startsAt: at,
-        endsAt: at + item.durationMs,
-        isAppointment: false,
-        offsetMs: item.offsetMs,
-        part: item.part,
-        partCount: item.partCount,
-      });
+      broadcast(item, at);
       at += item.durationMs;
       skipped = 0;
     }
@@ -318,7 +353,7 @@ export function programmeDay(
 
   return {
     placements: placements.sort((a, b) => a.startsAt - b.startsAt),
-    chain: { cursorMs: cursor, index },
+    chain: { cursorMs: cursor, index, deferred },
   };
 }
 
@@ -347,7 +382,7 @@ export function programmeWindow(
     dayBounds(fromMs).start - CHAIN_LOOKBACK_DAYS * 24 * 60 * 60_000,
   ).start;
 
-  let chain: Chain = { cursorMs: firstDay, index: 0 };
+  let chain: Chain = { cursorMs: firstDay, index: 0, deferred: [] };
 
   for (let day = firstDay; day < toMs; day = dayBounds(day).end) {
     const result = programmeDay(subjectId, day, appointments, library, chain, cache);
