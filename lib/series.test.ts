@@ -43,6 +43,13 @@ describe('reading a series out of a title', () => {
     expect(seriesStem('#12')).toBeNull();
   });
 
+  it('reads no series out of a title that opens with a link', () => {
+    // Streamers put their schedule at the front, and the separator after it
+    // makes the URL look exactly like a series name.
+    expect(seriesStem('http://speedgaming.org/schedule ~~ Race night')).toBeNull();
+    expect(seriesStem('www.example.com — Episode 4')).toBeNull();
+  });
+
   it('does not split a hyphenated word', () => {
     // The separator needs space around it, or "Sci-Fi" becomes "Sci".
     expect(seriesStem('Sci-Fi Retrospective Number One')).toBe('sci fi retrospective number one');
@@ -55,15 +62,15 @@ describe('assigning a series to every programme', () => {
       run(['Deep Dive Diaries - Part 1', 'Deep Dive Diaries - Part 2', 'Deep Dive Diaries - Part 3']),
     );
 
-    expect(new Set(keys.values()).size).toBe(1);
-    expect([...keys.values()][0]).toContain('title:10:deep dive diaries');
+    expect(new Set([...keys.values()].map((v) => v.key)).size).toBe(1);
+    expect([...keys.values()][0].key).toContain('title:10:deep dive diaries');
   });
 
   it('will not call two videos a series', () => {
     // A pair sharing an opening is usually coincidence, not a series.
     const keys = assignSeries(run(['Deep Dive Diaries - Part 1', 'Deep Dive Diaries - Part 2']));
 
-    expect([...keys.values()].every((k) => k === 'channel:10')).toBe(true);
+    expect([...keys.values()].every((v) => v.key === 'channel:10')).toBe(true);
   });
 
   it('keeps two channels apart even when they title alike', () => {
@@ -74,7 +81,7 @@ describe('assigning a series to every programme', () => {
       ),
     ]);
 
-    expect(new Set(keys.values()).size).toBe(2);
+    expect(new Set([...keys.values()].map((v) => v.key)).size).toBe(2);
   });
 
   it('prefers a playlist the creator declared over anything guessed', () => {
@@ -84,9 +91,9 @@ describe('assigning a series to every programme', () => {
       program({ programId: 3, title: 'Deep Dive Diaries - Part 3' }),
     ]);
 
-    expect(keys.get(1)).toBe('playlist:PL123');
+    expect(keys.get(1)!.key).toBe('playlist:PL123');
     // And the declared one is not counted towards the guessed cluster.
-    expect(keys.get(2)).toBe('channel:10');
+    expect(keys.get(2)!.key).toBe('channel:10');
   });
 
   it('files a Twitch broadcast under the game it was streamed under', () => {
@@ -94,11 +101,11 @@ describe('assigning a series to every programme', () => {
       program({ programId: 1, platform: 'twitch', category: 'Melee', title: 'friday night' }),
     ]);
 
-    expect(keys.get(1)).toBe('category:10:Melee');
+    expect(keys.get(1)!.key).toBe('category:10:Melee');
   });
 
   it('falls back to the channel, so a row still airs a stretch of one creator', () => {
-    expect(assignSeries([program({ title: 'A One Off Video Nobody Repeats' })]).get(1)).toBe(
+    expect(assignSeries([program({ title: 'A One Off Video Nobody Repeats' })]).get(1)!.key).toBe(
       'channel:10',
     );
   });
@@ -106,6 +113,6 @@ describe('assigning a series to every programme', () => {
   it('gives every programme a key', () => {
     const keys = assignSeries(run(['One', 'Two', 'Three', 'Four']));
     expect(keys.size).toBe(4);
-    expect([...keys.values()].every(Boolean)).toBe(true);
+    expect([...keys.values()].every((v) => Boolean(v.key))).toBe(true);
   });
 });

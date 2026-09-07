@@ -124,6 +124,20 @@ export interface GuideSlot {
   channelName: string;
   /** Twitch login / YouTube handle — what the embed needs. */
   channelLogin: string;
+  /**
+   * The creator's picture. A bar too narrow for a title can still carry this,
+   * and at rest knowing whose programme it is beats four letters of its name.
+   */
+  channelAvatarUrl: string | null;
+  /**
+   * What this belongs with. Consecutive slots sharing it are one block, which
+   * the guide labels once above the run rather than on every bar.
+   *
+   * Empty for an appointment: a live broadcast belongs to itself.
+   */
+  seriesKey: string;
+  /** What to call the block. Null where the creator's own name will do. */
+  seriesLabel: string | null;
   platform: Platform;
 }
 
@@ -192,6 +206,7 @@ export function loadGuideWindow(from: Date, to: Date, now: Date = new Date()): G
       displayName: channels.displayName,
       login: channels.login,
       platform: channels.platform,
+      avatarUrl: channels.avatarUrl,
     })
     .from(subjectChannels)
     .innerJoin(channels, eq(channels.id, subjectChannels.channelId))
@@ -273,6 +288,7 @@ export function loadGuideWindow(from: Date, to: Date, now: Date = new Date()): G
           category: r.category,
           platform: byChannel.get(r.channelId)?.platform ?? 'twitch',
           seriesId: r.seriesId,
+          seriesTitle: r.seriesTitle,
         }),
       ),
     );
@@ -280,7 +296,7 @@ export function loadGuideWindow(from: Date, to: Date, now: Date = new Date()): G
     const library: LibraryItem[] = libraryRows.map((r) => ({
       programId: r.id,
       durationMs: r.endsAt.getTime() - r.startsAt.getTime(),
-      seriesKey: seriesKeys.get(r.id),
+      seriesKey: seriesKeys.get(r.id)?.key,
       // Publication order, so a block plays through a series the way it was
       // made rather than jumping about inside it.
       sequence: r.startsAt.getTime(),
@@ -316,6 +332,10 @@ export function loadGuideWindow(from: Date, to: Date, now: Date = new Date()): G
         channelId: row.channelId,
         channelName: channel?.displayName ?? '',
         channelLogin: channel?.login ?? '',
+        channelAvatarUrl: channel?.avatarUrl ?? null,
+        // An appointment is its own programme, not part of a run.
+        seriesKey: placement.isAppointment ? '' : (seriesKeys.get(row.id)?.key ?? ''),
+        seriesLabel: placement.isAppointment ? null : (seriesKeys.get(row.id)?.label ?? null),
         platform: channel?.platform ?? 'twitch',
       });
     }

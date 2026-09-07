@@ -1,6 +1,7 @@
 .cell {
   position: absolute;
-  top: 3px;
+  /* Below the block strip, which names the run this bar belongs to. */
+  top: calc(var(--band-h, 0px) + 2px);
   bottom: 3px;
   border-radius: 5px;
   padding: calc(5px * var(--ui-scale)) calc(9px * var(--ui-scale));
@@ -112,6 +113,35 @@
 .aired {
   background: var(--aired);
   border-color: color-mix(in srgb, var(--text-dim) 30%, transparent);
+}
+
+/*
+ * The narrow-bar tier. A bar between MIN_ICON_PX and MIN_LABEL_PX carries the
+ * creator rather than the programme: at that width a title is four letters and
+ * says nothing, while a face is recognisable at a glance.
+ */
+.avatar,
+.initials {
+  align-self: center;
+  width: calc(16px * var(--ui-scale));
+  height: calc(16px * var(--ui-scale));
+  border-radius: 50%;
+  flex: none;
+}
+
+.avatar {
+  object-fit: cover;
+}
+
+.initials {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--text) 18%, transparent);
+  color: var(--text);
+  font-size: calc(8px * var(--ui-scale));
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
 .badge {

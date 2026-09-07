@@ -41,6 +41,15 @@ const MIN_STEM_LENGTH = 10;
  */
 const SEPARATOR = /\s+[|—–~]+\s+|\s+-\s+|:\s+/;
 
+/**
+ * A title that opens with a link names no series.
+ *
+ * Streamers put their schedule or socials at the front of a title, and the
+ * separator that follows makes the URL look exactly like a series name — one
+ * lineup here produced a block called "http://speedgaming.org/schedule".
+ */
+const LINK = /^(?:https?:\/\/|www\.)/i;
+
 /** Trailing episode markers, which vary but always sit at the end. */
 const TRAILING_MARKERS: RegExp[] = [
   // (Part 2), [Episode 11], (pt. 3)
@@ -55,22 +64,27 @@ const TRAILING_MARKERS: RegExp[] = [
 /**
  * The part of a title that names the series rather than the episode.
  *
- * Returns null when nothing survives that is long enough to mean anything —
- * a one-off video with no series in its name.
+ * Returns both forms: `stem` is flattened for comparison, so decoration and
+ * case cannot split one series in two, and `display` keeps the creator's own
+ * capitalisation because that is what gets shown above the row.
+ *
+ * Null when nothing survives that is long enough to mean anything — a one-off
+ * video with no series in its name.
  */
-export function seriesStem(title: string): string | null {
-  let stem = title.normalize('NFKC').trim();
+function splitTitle(title: string): { stem: string; display: string } | null {
+  let rest = title.normalize('NFKC').trim();
 
   // Strip the episode marker first: it may sit after the separator, and
   // removing it can leave the whole title as the stem.
   for (const marker of TRAILING_MARKERS) {
-    stem = stem.replace(marker, '').trim();
+    rest = rest.replace(marker, '').trim();
   }
 
-  const [head] = stem.split(SEPARATOR);
-  const candidate = (head ?? stem).trim();
+  const [head] = rest.split(SEPARATOR);
+  const display = (head ?? rest).trim();
+  if (LINK.test(display)) return null;
 
-  const normalised = candidate
+  const stem = display
     .toLowerCase()
     // Drop emoji, punctuation and decoration so "🔴 Elden Ring!" and
     // "Elden Ring" are the same series.
@@ -78,7 +92,12 @@ export function seriesStem(title: string): string | null {
     .replace(/\s+/g, ' ')
     .trim();
 
-  return normalised.length >= MIN_STEM_LENGTH ? normalised : null;
+  return stem.length >= MIN_STEM_LENGTH ? { stem, display } : null;
+}
+
+/** The comparable form of a title's series, or null if it names none. */
+export function seriesStem(title: string): string | null {
+  return splitTitle(title)?.stem ?? null;
 }
 
 /** One programme, as much of it as deciding its series requires. */
@@ -90,6 +109,19 @@ export interface SeriesInput {
   platform: Platform;
   /** Playlist the creator filed it under, where that has been collected. */
   seriesId: string | null;
+  /** That playlist's name, which is what the guide shows above the run. */
+  seriesTitle?: string | null;
+}
+
+/** What a programme belongs to, and what to call it. */
+export interface Series {
+  /** Groups programmes. Opaque — only equality is meaningful. */
+  key: string;
+  /**
+   * What to show above the run, or null when the creator's own name is the
+   * best answer and the caller already knows it.
+   */
+  label: string | null;
 }
 
 /**
@@ -99,43 +131,62 @@ export interface SeriesInput {
  * way are not one series, and a stem is only meaningful in the context of who
  * published it.
  */
-export function assignSeries(programs: SeriesInput[]): Map<number, string> {
+export function assignSeries(programs: SeriesInput[]): Map<number, Series> {
   // Count stems per channel first — a stem earns series status only once
   // enough siblings share it.
-  const stems = new Map<number, string | null>();
+  const stems = new Map<number, { stem: string; display: string } | null>();
   const population = new Map<string, number>();
+  const naming = new Map<string, { programId: number; display: string }>();
 
   for (const program of programs) {
-    const stem = program.seriesId ? null : seriesStem(program.title);
-    stems.set(program.programId, stem);
-    if (stem) {
-      const key = `${program.channelId}:${stem}`;
-      population.set(key, (population.get(key) ?? 0) + 1);
+    const split = program.seriesId ? null : splitTitle(program.title);
+    stems.set(program.programId, split);
+    if (!split) continue;
+
+    const key = `${program.channelId}:${split.stem}`;
+    population.set(key, (population.get(key) ?? 0) + 1);
+
+    // The lowest id names the series, so the label does not depend on the
+    // order rows happened to come back in.
+    const held = naming.get(key);
+    if (!held || program.programId < held.programId) {
+      naming.set(key, { programId: program.programId, display: split.display });
     }
   }
 
-  const out = new Map<number, string>();
+  const out = new Map<number, Series>();
 
   for (const program of programs) {
     if (program.seriesId) {
-      out.set(program.programId, `playlist:${program.seriesId}`);
+      out.set(program.programId, {
+        key: `playlist:${program.seriesId}`,
+        label: program.seriesTitle ?? null,
+      });
       continue;
     }
 
-    const stem = stems.get(program.programId);
-    if (stem && (population.get(`${program.channelId}:${stem}`) ?? 0) >= MIN_CLUSTER) {
-      out.set(program.programId, `title:${program.channelId}:${stem}`);
+    const split = stems.get(program.programId);
+    const key = split ? `${program.channelId}:${split.stem}` : null;
+    if (key && (population.get(key) ?? 0) >= MIN_CLUSTER) {
+      out.set(program.programId, {
+        key: `title:${key}`,
+        label: naming.get(key)?.display ?? null,
+      });
       continue;
     }
 
     // A Twitch broadcast is filed under the game it was streamed under, which
     // is the closest thing a stream has to a series.
     if (program.platform === 'twitch' && program.category) {
-      out.set(program.programId, `category:${program.channelId}:${program.category}`);
+      out.set(program.programId, {
+        key: `category:${program.channelId}:${program.category}`,
+        label: program.category,
+      });
       continue;
     }
 
-    out.set(program.programId, `channel:${program.channelId}`);
+    // The creator is the series. No label: the caller knows their name.
+    out.set(program.programId, { key: `channel:${program.channelId}`, label: null });
   }
 
   return out;

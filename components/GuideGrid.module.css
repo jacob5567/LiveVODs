@@ -12,6 +12,9 @@
    * how much of an evening fits on screen.
    */
   --ppm: 4;
+  /* Height of the block strip along the top of each lane. Scales with the
+     interface, since the label inside it does. */
+  --band-h: calc(13px * var(--ui-scale));
   --channel-col: 200px;
   /**
    * Capped against viewport height as well as width: a wide but short display
@@ -242,6 +245,63 @@
   padding: 1px 6px;
   border-radius: 0 0 4px 4px;
   white-space: nowrap;
+}
+
+/*
+ * The block strip. A thin band along the top of the lane naming the run of
+ * programmes beneath it — the thing a bar too narrow for its own title can
+ * still tell you.
+ */
+.band {
+  position: absolute;
+  top: 0;
+  height: var(--band-h);
+  display: flex;
+  align-items: center;
+  padding-inline: calc(7px * var(--ui-scale));
+  overflow: hidden;
+  pointer-events: none;
+  border-radius: 3px 3px 0 0;
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+.bandLabel {
+  color: var(--text-dim);
+  font-size: calc(9.5px * var(--ui-scale));
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.zoom {
+  display: flex;
+  align-items: center;
+  gap: calc(4px * var(--ui-scale));
+  margin-left: auto;
+}
+
+.zoom .button {
+  min-width: calc(28px * var(--ui-scale));
+  padding-inline: calc(6px * var(--ui-scale));
+  font-size: calc(15px * var(--ui-scale));
+  line-height: 1;
+}
+
+.zoom .button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.zoomLevel {
+  min-width: calc(26px * var(--ui-scale));
+  text-align: center;
+  color: var(--text-dim);
+  font-size: calc(12px * var(--ui-scale));
+  font-variant-numeric: tabular-nums;
 }
 
 .empty {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Guide, GuideSlot, GuideSubject } from '@/lib/guide';
 import { MINUTE_MS } from '@/lib/time';
 import { BASE_METRICS, readMetrics, sameMetrics } from '@/lib/metrics';
@@ -17,6 +17,20 @@ const CLOCK_INTERVAL_MS = 30_000;
 
 /** Context kept to the left of the now-line when jumping to it, in minutes. */
 const LEAD_IN_MIN = 60;
+
+/**
+ * How far the time axis can be stretched.
+ *
+ * The breakpoints set a scale that fits an evening on screen, which leaves a
+ * ten-minute programme about forty pixels wide — too narrow for its title. The
+ * viewer can trade visible hours for readable bars and back.
+ */
+const ZOOM_STEPS = [0.75, 1, 1.5, 2, 3] as const;
+
+const ZOOM_KEY = 'livevods:zoom';
+
+/** Below this a band is drawn but not named — there is no room for the words. */
+const MIN_BAND_LABEL_PX = 44;
 
 const minutesFrom = (ms: number, from: number) => (ms - from) / MINUTE_MS;
 
@@ -37,6 +51,48 @@ function showingNow(subject: GuideSubject, at: number): GuideSlot | undefined {
     // whatever is nearest rather than nothing at all.
     [...subject.slots].sort((a, b) => Math.abs(a.startsAt - at) - Math.abs(b.startsAt - at))[0]
   );
+}
+
+/** An unbroken run of one series on a row: what the band above it labels. */
+interface Band {
+  key: string;
+  label: string;
+  startsAt: number;
+  endsAt: number;
+}
+
+/**
+ * Groups a row's slots into the runs the guide labels.
+ *
+ * The bars carry programme titles; the band carries what the run *is*. That is
+ * the only thing a bar too narrow for text can still say, and on a row of
+ * short programmes it is the difference between a strip of anonymous tiles and
+ * a visible piece of scheduling.
+ */
+function bandsFor(subject: GuideSubject): Band[] {
+  const bands: Band[] = [];
+
+  for (const slot of subject.slots) {
+    // An appointment belongs to itself, and its bar is wide enough to say so.
+    if (!slot.seriesKey) continue;
+
+    const open = bands[bands.length - 1];
+    if (open && open.key === slot.seriesKey && open.endsAt >= slot.startsAt) {
+      open.endsAt = Math.max(open.endsAt, slot.endsAt);
+      continue;
+    }
+
+    bands.push({
+      key: slot.seriesKey,
+      // Falling back to the creator, who is the series when nothing finer was
+      // found — and is a better answer than a truncated episode title.
+      label: slot.seriesLabel ?? slot.channelName,
+      startsAt: slot.startsAt,
+      endsAt: slot.endsAt,
+    });
+  }
+
+  return bands;
 }
 
 /**
@@ -98,6 +154,32 @@ export function GuideGrid({
   const [metrics, setMetrics] = useState(BASE_METRICS);
   const wrap = useRef<HTMLDivElement>(null);
 
+  /**
+   * Starts at 1 so the first client render matches the server's, then picks up
+   * whatever the viewer last chose. Their own convenience, on their own
+   * machine — it never needs to reach anything else.
+   */
+  const [zoom, setZoom] = useState(1);
+
+  useEffect(() => {
+    try {
+      const stored = Number(window.localStorage.getItem(ZOOM_KEY));
+      if (ZOOM_STEPS.includes(stored as (typeof ZOOM_STEPS)[number])) setZoom(stored);
+    } catch {
+      // Private windows and blocked site data both throw on access.
+    }
+  }, []);
+
+  /**
+   * Zoom stretches the time axis and nothing else: type and row heights keep
+   * the size the breakpoint chose, so widening a bar makes its label fit
+   * rather than growing the label with it.
+   */
+  const scaled = useMemo(
+    () => ({ ...metrics, pxPerMinute: metrics.pxPerMinute * zoom }),
+    [metrics, zoom],
+  );
+
   useEffect(() => {
     const sync = () => {
       const node = wrap.current;
@@ -112,8 +194,8 @@ export function GuideGrid({
   }, []);
 
   const xFor = useCallback(
-    (ms: number, from: number) => minutesFrom(ms, from) * metrics.pxPerMinute,
-    [metrics.pxPerMinute],
+    (ms: number, from: number) => minutesFrom(ms, from) * scaled.pxPerMinute,
+    [scaled.pxPerMinute],
   );
 
   /**
@@ -138,8 +220,8 @@ export function GuideGrid({
   }, []);
 
   const totalWidth = useMemo(
-    () => minutesFrom(guide.to, guide.from) * metrics.pxPerMinute,
-    [guide.from, guide.to, metrics.pxPerMinute],
+    () => minutesFrom(guide.to, guide.from) * scaled.pxPerMinute,
+    [guide.from, guide.to, scaled.pxPerMinute],
   );
 
   const ticks = useMemo(() => {
@@ -154,8 +236,8 @@ export function GuideGrid({
 
   const offsetForNow = useCallback(
     // Leave an hour of context to the left rather than pinning now to the edge.
-    () => Math.max(0, xFor(Date.now(), guide.from) - LEAD_IN_MIN * metrics.pxPerMinute),
-    [guide.from, xFor, metrics.pxPerMinute],
+    () => Math.max(0, xFor(Date.now(), guide.from) - LEAD_IN_MIN * scaled.pxPerMinute),
+    [guide.from, xFor, scaled.pxPerMinute],
   );
 
   /**
@@ -278,11 +360,48 @@ export function GuideGrid({
   const nudge = useCallback(
     (hours: number) =>
       scroller.current?.scrollBy({
-        left: hours * 60 * metrics.pxPerMinute,
+        left: hours * 60 * scaled.pxPerMinute,
         behavior: 'smooth',
       }),
-    [metrics.pxPerMinute],
+    [scaled.pxPerMinute],
   );
+
+  /**
+   * Zooming about the middle of the view.
+   *
+   * Rescaling the axis without this leaves scrollLeft where it was, which at a
+   * different scale points at a different hour — so the guide would jump to
+   * some unrelated part of the evening every time the viewer zoomed.
+   */
+  const heldCentre = useRef<number | null>(null);
+
+  const changeZoom = useCallback(
+    (next: number) => {
+      const node = scroller.current;
+      if (node) {
+        const lane = node.clientWidth - scaled.channelColW;
+        heldCentre.current =
+          guide.from + ((node.scrollLeft + lane / 2) / scaled.pxPerMinute) * MINUTE_MS;
+      }
+      setZoom(next);
+      try {
+        window.localStorage.setItem(ZOOM_KEY, String(next));
+      } catch {
+        // Not being able to remember it is not a reason to refuse the change.
+      }
+    },
+    [guide.from, scaled.pxPerMinute, scaled.channelColW],
+  );
+
+  useLayoutEffect(() => {
+    const node = scroller.current;
+    const centre = heldCentre.current;
+    if (!node || centre === null) return;
+    heldCentre.current = null;
+
+    const lane = node.clientWidth - scaled.channelColW;
+    node.scrollLeft = Math.max(0, xFor(centre, guide.from) - lane / 2);
+  }, [scaled.pxPerMinute, scaled.channelColW, xFor, guide.from]);
 
   /**
    * Tuning in to a row, the way changing channel on a television does: whatever
@@ -351,7 +470,7 @@ export function GuideGrid({
   if (guide.subjects.length === 0) {
     return (
       <div className={styles.wrap} ref={wrap}>
-        <Toolbar liveCount={0} onNow={scrollToNow} onNudge={nudge} />
+        <Toolbar liveCount={0} onNow={scrollToNow} onNudge={nudge} zoom={zoom} onZoom={changeZoom} />
         <div className={styles.empty}>
           <p>No subjects in the lineup yet.</p>
           <p>
@@ -369,7 +488,13 @@ export function GuideGrid({
 
   return (
     <div className={styles.wrap} ref={wrap}>
-      <Toolbar liveCount={liveCount} onNow={scrollToNow} onNudge={nudge} />
+      <Toolbar
+        liveCount={liveCount}
+        onNow={scrollToNow}
+        onNudge={nudge}
+        zoom={zoom}
+        onZoom={changeZoom}
+      />
 
       {currentSelection && (
         <PlayerPane
@@ -437,13 +562,30 @@ export function GuideGrid({
               </div>
 
               <div className={styles.lane} style={{ width: totalWidth }}>
+                {bandsFor(subject).map((band) => {
+                  const left = xFor(band.startsAt, guide.from);
+                  const width = xFor(band.endsAt, guide.from) - left;
+                  return (
+                    <div
+                      key={`${band.key}:${band.startsAt}`}
+                      className={styles.band}
+                      style={{ left, width }}
+                      aria-hidden="true"
+                    >
+                      {width >= MIN_BAND_LABEL_PX * scaled.uiScale && (
+                        <span className={styles.bandLabel}>{band.label}</span>
+                      )}
+                    </div>
+                  );
+                })}
+
                 {subject.slots.map((slot) => (
                   <ProgramCell
                     key={slot.key}
                     slot={slot}
                     viewportStart={guide.from}
                     viewportEnd={guide.to}
-                    metrics={metrics}
+                    metrics={scaled}
                     selected={selection?.slot.key === slot.key}
                   />
                 ))}
@@ -473,11 +615,17 @@ function Toolbar({
   liveCount,
   onNow,
   onNudge,
+  zoom,
+  onZoom,
 }: {
   liveCount: number;
   onNow: () => void;
   onNudge: (hours: number) => void;
+  zoom: number;
+  onZoom: (zoom: number) => void;
 }) {
+  const step = ZOOM_STEPS.indexOf(zoom as (typeof ZOOM_STEPS)[number]);
+  const shift = (by: number) => onZoom(ZOOM_STEPS[Math.max(0, Math.min(ZOOM_STEPS.length - 1, step + by))]);
   return (
     <div className={styles.toolbar}>
       <div className={styles.brand}>
@@ -495,6 +643,28 @@ function Toolbar({
       <button type="button" className={styles.button} onClick={() => onNudge(2)}>
         2h →
       </button>
+
+      <div className={styles.zoom}>
+        <button
+          type="button"
+          className={styles.button}
+          onClick={() => shift(-1)}
+          disabled={step <= 0}
+          aria-label="Show more hours"
+        >
+          −
+        </button>
+        <span className={styles.zoomLevel}>{`${zoom}×`}</span>
+        <button
+          type="button"
+          className={styles.button}
+          onClick={() => shift(1)}
+          disabled={step >= ZOOM_STEPS.length - 1}
+          aria-label="Show wider programmes"
+        >
+          +
+        </button>
+      </div>
     </div>
   );
 }

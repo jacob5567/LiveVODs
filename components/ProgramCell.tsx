@@ -6,13 +6,32 @@ import type { GridMetrics } from '@/lib/metrics';
 import styles from './ProgramCell.module.css';
 
 /**
- * Below this a bar has no room for a title, so it shows nothing but its colour.
- * Scaled with the interface, since the type inside it scales too.
+ * Below this a bar has no room for a title. Scaled with the interface, since
+ * the type inside it scales too.
  */
 const MIN_LABEL_PX = 54;
 
+/**
+ * Below this a bar cannot even carry the creator's picture, and shows nothing
+ * but its colour.
+ *
+ * Between the two it shows the picture alone. Nearly a third of bars fall in
+ * that band at the base scale, and they are wide enough for four or five
+ * letters of a title — which tells you nothing — but easily wide enough for a
+ * face you recognise.
+ */
+const MIN_ICON_PX = 22;
+
 /** Horizontal padding inside a bar, kept in sync with .cell in the stylesheet. */
 const CELL_PADDING_PX = 18;
+
+/** "Adam Savage's Tested" → "AS". Two letters is all a narrow bar can hold. */
+function initialsOf(name: string): string {
+  const words = name.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return '';
+  const letters = words.length === 1 ? words[0].slice(0, 2) : words[0][0] + words[1][0];
+  return letters.toUpperCase();
+}
 
 export function ProgramCell({
   slot,
@@ -40,6 +59,7 @@ export function ProgramCell({
 
   const isLive = slot.state === 'live' && slot.isAppointment;
   const roomForLabel = width >= MIN_LABEL_PX * metrics.uiScale;
+  const roomForIcon = !roomForLabel && width >= MIN_ICON_PX * metrics.uiScale;
 
   const classes = [styles.cell, styles[slot.state]];
   if (isLive && slot.endsAtProvisional) classes.push(styles.ongoing);
@@ -84,6 +104,15 @@ export function ProgramCell({
       data-slot={slot.key}
       aria-hidden="true"
     >
+      {roomForIcon &&
+        (slot.channelAvatarUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img className={styles.avatar} src={slot.channelAvatarUrl} alt="" loading="lazy" />
+        ) : (
+          // No picture stored — the creator's initials still say whose it is.
+          <span className={styles.initials}>{initialsOf(slot.channelName)}</span>
+        ))}
+
       {roomForLabel && (
         /**
          * The bar's own geometry, handed to CSS so the label can slide right as

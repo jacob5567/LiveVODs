@@ -28,6 +28,9 @@ const slot = (overrides: Partial<GuideSlot> = {}): GuideSlot => ({
   channelId: 1,
   channelName: 'Alice',
   channelLogin: 'alice',
+  channelAvatarUrl: null,
+  seriesKey: 'channel:1',
+  seriesLabel: null,
   platform: 'twitch',
   ...overrides,
 });

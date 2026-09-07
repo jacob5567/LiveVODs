@@ -66,11 +66,21 @@ function slot(programId: number, title: string, startsAt: number, endsAt: number
     channelId: 1,
     channelName: 'Alice',
     channelLogin: 'alice',
+    channelAvatarUrl: null,
+    seriesKey: 'channel:1',
+    seriesLabel: null,
     platform: 'twitch',
   };
 }
 
 beforeEach(() => {
+  // The grid remembers the viewer's zoom, which would otherwise carry from one
+  // test into the next.
+  try {
+    window.localStorage.clear();
+  } catch {
+    // No storage in this environment; nothing to carry over either.
+  }
   vi.useFakeTimers({ shouldAdvanceTime: true });
   // The grid subscribes to live updates on mount; neither exists in happy-dom.
   vi.stubGlobal(
@@ -396,5 +406,84 @@ describe('GuideGrid', () => {
     render(<GuideGrid guide={{ from: NOW, to: NOW + 1000, subjects: [] }} />);
     expect(screen.getByText(/No subjects in the lineup yet/i)).toBeTruthy();
     expect(screen.getByText('config/channels.yml')).toBeTruthy();
+  });
+});
+
+describe('reading a row at rest', () => {
+  it('names a run of programmes above the row', () => {
+    // The bars carry episode titles; the band carries what the run is. On a
+    // row of short programmes it is the only thing still legible.
+    const g = guide();
+    g.subjects[0].slots = [
+      { ...slot(30, 'Ep 1', NOW - 30 * MIN, NOW), seriesKey: 'title:1:deep', seriesLabel: 'Deep Dives' },
+      { ...slot(31, 'Ep 2', NOW, NOW + 30 * MIN), seriesKey: 'title:1:deep', seriesLabel: 'Deep Dives' },
+    ];
+    const { container } = render(<GuideGrid guide={g} />);
+
+    const bands = [...container.querySelectorAll('[data-row="1"] [class*="bandLabel"]')].map(
+      (b) => b.textContent,
+    );
+    expect(bands).toContain('Deep Dives');
+    // One band, not one per programme.
+    expect(bands.filter((b) => b === 'Deep Dives')).toHaveLength(1);
+  });
+
+  it('starts a new band when the series changes', () => {
+    const g = guide();
+    g.subjects[0].slots = [
+      { ...slot(30, 'A', NOW - 30 * MIN, NOW), seriesKey: 'title:1:one', seriesLabel: 'First Run' },
+      { ...slot(31, 'B', NOW, NOW + 30 * MIN), seriesKey: 'title:1:two', seriesLabel: 'Second Run' },
+    ];
+    const { container } = render(<GuideGrid guide={g} />);
+
+    const bands = [...container.querySelectorAll('[data-row="1"] [class*="bandLabel"]')].map(
+      (b) => b.textContent,
+    );
+    expect(bands).toEqual(['First Run', 'Second Run']);
+  });
+
+  it('leaves a live broadcast out of the bands, since it belongs to itself', () => {
+    const g = guide();
+    g.subjects[0].slots = [
+      { ...slot(30, 'Live thing', NOW, NOW + 60 * MIN), state: 'live', isAppointment: true, seriesKey: '' },
+    ];
+    const { container } = render(<GuideGrid guide={g} />);
+
+    expect(container.querySelectorAll('[data-row="1"] [class*="band"]')).toHaveLength(0);
+  });
+
+  it('shows the creator on a bar too narrow to hold a title', () => {
+    // Ten minutes is forty pixels at the base scale: room for four letters of
+    // a title, which says nothing, but room enough for who made it.
+    const g = guide();
+    g.subjects[0].slots = [slot(30, 'A Very Long Programme Title', NOW, NOW + 10 * MIN)];
+    const { container } = render(<GuideGrid guide={g} />);
+
+    expect(container.querySelector('[class*="initials"]')?.textContent).toBe('AL');
+    expect(screen.queryByText('A Very Long Programme Title')).toBeNull();
+  });
+});
+
+describe('zoom', () => {
+  const zoomIn = () => screen.getByRole('button', { name: 'Show wider programmes' });
+
+  it('widens the timeline without changing the window', () => {
+    const { container } = render(<GuideGrid guide={guide()} />);
+    const lane = () => container.querySelector<HTMLElement>('[class*="lane"]')!;
+
+    const before = Number.parseFloat(lane().style.width);
+    fireEvent.click(zoomIn());
+
+    expect(Number.parseFloat(lane().style.width)).toBeGreaterThan(before);
+  });
+
+  it('reports the level it is at, and stops at the widest', () => {
+    render(<GuideGrid guide={guide()} />);
+
+    expect(screen.getByText('1×')).toBeTruthy();
+    for (let i = 0; i < 6; i++) fireEvent.click(zoomIn());
+
+    expect(screen.getByText('3×')).toBeTruthy();
+    expect((zoomIn() as HTMLButtonElement).disabled).toBe(true);
   });
 });
