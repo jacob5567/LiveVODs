@@ -282,27 +282,28 @@ describe('mapping videos to observations', () => {
     expect(observations[0].platformRef).toBe('vid-2');
   });
 
-  it('keeps a finished broadcast however short it ran', async () => {
-    // The Shorts filter guards ordinary uploads, where length is the only
-    // signal. A broadcast that happened is a recording of a real event, so it
-    // is library content whatever its length.
+  it('offers a finished broadcast only against a programme already known', async () => {
+    // Which on YouTube means a premiere. A livestream archive brings nothing
+    // to a row — they run for days — so it must not create one.
     mockYouTube({
       playlistItems: { items: [{ contentDetails: { videoId: 'vid-1' } }] },
       videos: {
         items: [
           video({
-            contentDetails: { duration: 'PT3M' },
+            contentDetails: { duration: 'PT9H' },
             liveStreamingDetails: {
-              actualStartTime: '2026-09-01T19:00:00Z',
-              actualEndTime: '2026-09-01T19:03:00Z',
+              actualStartTime: '2026-09-01T10:00:00Z',
+              actualEndTime: '2026-09-01T19:00:00Z',
             },
           }),
         ],
       },
     });
 
-    const observations = await connector().fetchSchedule(channel());
-    expect(observations.some((o) => o.kind === 'vod')).toBe(true);
+    const [obs] = (await connector().fetchSchedule(channel())) as VodObservation[];
+
+    expect(obs.kind).toBe('vod');
+    expect(obs.updateOnly).toBe(true);
   });
 
   it('asks for the full page of uploads the endpoint allows', async () => {

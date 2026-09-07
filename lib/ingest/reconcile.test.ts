@@ -340,6 +340,60 @@ describe('idempotency', () => {
     expect(inserts(writes)).toHaveLength(0);
   });
 
+  it('will not create a programme from a recording it was never following', () => {
+    // A finished YouTube livestream looks exactly like a finished premiere:
+    // both carry an actual start and end. The premiere was announced with a
+    // real duration so it already has a row; the livestream was never
+    // programmed, and its archive must not smuggle one in.
+    const archive: Observation = {
+      kind: 'vod',
+      channelId: CHANNEL,
+      platformRef: 'stream-archive',
+      vodRef: 'stream-archive',
+      title: 'Nine hours of marathon',
+      startsAt: at(-600),
+      endsAt: at(-60),
+      canonicalUrl: 'https://youtu.be/stream-archive',
+      thumbnailUrl: null,
+      updateOnly: true,
+    };
+
+    expect(inserts(reconcile([], [archive], NOW))).toHaveLength(0);
+  });
+
+  it('records the recording of a premiere it was following', () => {
+    const premiere = program({
+      id: 60,
+      platformRef: 'premiere-xyz',
+      state: 'scheduled',
+      startsAt: at(-60),
+      endsAt: at(-45),
+    });
+
+    const writes = reconcile(
+      [premiere],
+      [
+        {
+          kind: 'vod',
+          channelId: CHANNEL,
+          platformRef: 'premiere-xyz',
+          vodRef: 'premiere-xyz',
+          title: 'The Premiere',
+          startsAt: at(-60),
+          endsAt: at(-45),
+          canonicalUrl: 'https://youtu.be/premiere-xyz',
+          thumbnailUrl: null,
+          updateOnly: true,
+        },
+      ],
+      NOW,
+    );
+
+    expect(writes).toEqual([
+      { op: 'update', id: 60, patch: expect.objectContaining({ state: 'aired' }) },
+    ]);
+  });
+
   it('still announces a premiere when the channel has a recent upload nearby', () => {
     // Since the backfill landed, every channel carries hundreds of uploads. An
     // upload is library content that never aired, so it is not the aired form

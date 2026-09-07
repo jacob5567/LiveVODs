@@ -477,12 +477,21 @@ export class YouTubeConnector implements Connector {
       }
 
       if (details.actualEndTime && details.actualStartTime) {
+        /**
+         * The recording of a finished broadcast. Kept only where the programme
+         * is already known, which on YouTube means a premiere: those are
+         * announced with a real duration and so were programmed, while
+         * livestreams never were. A stream archive brings nothing to a row —
+         * they run for days, and one of them was a fortnight long — so no row
+         * is created for one here.
+         */
         observations.push({
           kind: 'vod',
           ...common,
           vodRef: video.id,
           startsAt: new Date(details.actualStartTime),
           endsAt: new Date(details.actualEndTime),
+          updateOnly: true,
         });
         continue;
       }

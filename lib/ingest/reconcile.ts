@@ -111,6 +111,17 @@ export interface VodObservation {
    * rather than treating it as something that actually aired then.
    */
   isUpload?: boolean;
+  /**
+   * Record this only against a programme already being followed; never create
+   * one from it.
+   *
+   * A finished YouTube broadcast is indistinguishable from a finished premiere
+   * once both are over — each carries an actual start and end. What separates
+   * them is that the premiere was announced with a real duration and so has a
+   * row already, while the livestream was never programmed at all. So the
+   * premiere keeps its recording and the livestream leaves nothing behind.
+   */
+  updateOnly?: boolean;
 }
 
 export type Observation =
@@ -329,6 +340,8 @@ export function reconcile(
 
   function applyVod(obs: VodObservation) {
     const existingRow = working.get(keyOf(obs.channelId, obs.platformRef));
+
+    if (!existingRow && obs.updateOnly) return;
 
     if (existingRow) {
       // Twitch publishes the VOD while the stream is still running, with a
