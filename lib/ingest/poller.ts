@@ -14,7 +14,7 @@ import type { ChannelRef, Connector, QuotaLedger } from '@/lib/connectors/types'
 import { QuotaExhaustedError } from '@/lib/connectors/youtube';
 import type { Observation } from './reconcile';
 import { reconcile } from './reconcile';
-import { applyWrites, loadWatchRefs, loadWorkingSet } from './persist';
+import { applySeries, applyWrites, loadWatchRefs, loadWorkingSet } from './persist';
 
 export const LIVE_INTERVAL_MS = 60_000;
 export const SCHEDULE_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -41,6 +41,15 @@ const DISCOVERY_BATCH = 30;
 
 /** Channels whose back catalogue is collected per backfill pass. */
 const BACKFILL_BATCH = 3;
+
+/**
+ * Channels whose playlists are read per series pass.
+ *
+ * Smaller than the backfill batch because it is the more expensive job per
+ * channel: enumerating playlists is a unit, but reading their contents is a
+ * unit per fifty entries, so a channel with a dozen long series costs dozens.
+ */
+const SERIES_BATCH = 2;
 
 /**
  * Backfill stops here and leaves the rest of the budget to ordinary ingest.
@@ -190,6 +199,57 @@ export const runScheduleTick = (c: Connector) =>
 export const runVodTick = (c: Connector) => runPerChannel(c, 'vod', (ch) => c.fetchRecentVods(ch));
 
 /**
+ * Reads playlists so the scheduler can air a series in a run.
+ *
+ * Shaped like the backfill: a one-off per channel behind the same quota floor,
+ * because a playlist is stable and re-reading it daily would spend units to
+ * learn nothing. Runs behind the backfill in practice — a series is worthless
+ * until the videos it groups have actually been collected.
+ */
+export async function runSeriesTick(connector: Connector, quota: QuotaLedger): Promise<void> {
+  if (!connector.fetchSeries) return;
+  if (quota.remaining() < BACKFILL_QUOTA_FLOOR) return;
+
+  const state = db.select().from(channelSyncState).all();
+  const backfilled = new Set(state.filter((r) => r.backfilledAt !== null).map((r) => r.channelId));
+  const done = new Set(state.filter((r) => r.seriesSyncedAt !== null).map((r) => r.channelId));
+
+  // Only channels whose catalogue is already in: grouping videos we have not
+  // collected yet would mark the channel done and never come back for them.
+  const pending = enabledChannels(connector.platform).filter(
+    (c) => backfilled.has(c.id) && !done.has(c.id),
+  );
+  if (pending.length === 0) return;
+
+  let grouped = 0;
+  for (const channel of pending.slice(0, SERIES_BATCH)) {
+    if (quota.remaining() < BACKFILL_QUOTA_FLOOR) break;
+    const now = new Date();
+    try {
+      grouped += applySeries(channel.id, await connector.fetchSeries(channel), now);
+
+      db.insert(channelSyncState)
+        .values({ channelId: channel.id, seriesSyncedAt: now })
+        .onConflictDoUpdate({
+          target: channelSyncState.channelId,
+          set: { seriesSyncedAt: now },
+        })
+        .run();
+    } catch (error) {
+      if (error instanceof QuotaExhaustedError) break;
+      console.warn(`[${connector.platform}] series failed for ${channel.login}:`, error);
+    }
+    await sleep(REQUEST_SPACING_MS);
+  }
+
+  console.log(
+    `[${connector.platform}] series: ${grouped} programmes grouped, ` +
+      `${pending.length - Math.min(SERIES_BATCH, pending.length)} channels still to do, ` +
+      `${quota.remaining()} units left`,
+  );
+}
+
+/**
  * Collects the back catalogue of channels that have never had one, a few at a
  * time. A catalogue does not change, so each channel is done once and then
  * left to the ordinary pass, which only ever looks at the newest page.
@@ -294,6 +354,14 @@ export function startPoller(connectors: Connector[], quota?: QuotaLedger): () =>
       stops.push(
         everyMs(`${connector.platform}:backfill`, BACKFILL_INTERVAL_MS, () =>
           runBackfillTick(connector, quota),
+        ),
+      );
+    }
+
+    if (connector.fetchSeries && quota) {
+      stops.push(
+        everyMs(`${connector.platform}:series`, BACKFILL_INTERVAL_MS, () =>
+          runSeriesTick(connector, quota),
         ),
       );
     }

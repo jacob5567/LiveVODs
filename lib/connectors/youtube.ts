@@ -16,7 +16,14 @@
  */
 import type { Observation } from '@/lib/ingest/reconcile';
 import { MIN_SLOT_MS } from '@/lib/schedule';
-import { chunk, type ChannelRef, type Connector, type QuotaLedger, type ResolvedChannel } from './types';
+import {
+  chunk,
+  type ChannelRef,
+  type Connector,
+  type QuotaLedger,
+  type ResolvedChannel,
+  type SeriesAssignment,
+} from './types';
 
 const API = 'https://www.googleapis.com/youtube/v3';
 
@@ -24,7 +31,28 @@ const API = 'https://www.googleapis.com/youtube/v3';
 const VIDEO_BATCH = 50;
 
 /** Cost in quota units, per the published table. */
-const COST = { channels: 1, playlistItems: 1, videos: 1 } as const;
+const COST = { channels: 1, playlistItems: 1, playlists: 1, videos: 1 } as const;
+
+/**
+ * Playlists read per channel, largest first.
+ *
+ * Enumerating them is one unit; reading their contents is one per fifty
+ * entries, which is where the cost is. A creator's big playlists are their
+ * actual series — the long tail is one-off collections — so taking the largest
+ * few buys nearly all of the signal for a fraction of the spend.
+ */
+const SERIES_MAX_PLAYLISTS = 12;
+
+/** Entries read from any one playlist. Four units at the very most. */
+const SERIES_MAX_ITEMS = 200;
+
+/**
+ * Below this a playlist is not a series.
+ *
+ * Matches the threshold lib/series.ts uses for inferred series: two entries
+ * together is a pair, not a run worth giving the row over to.
+ */
+const SERIES_MIN_ITEMS = 3;
 
 /**
  * How many recent uploads to inspect per channel when discovering.
@@ -68,6 +96,12 @@ interface YouTubeChannel {
 
 interface PlaylistItem {
   contentDetails: { videoId: string };
+}
+
+interface YouTubePlaylist {
+  id: string;
+  snippet: { title: string };
+  contentDetails?: { itemCount?: number };
 }
 
 interface YouTubeVideo {
@@ -293,6 +327,79 @@ export class YouTubeConnector implements Connector {
 
     const videos = await this.fetchVideos(videoIds);
     return this.toObservations(videos, new Map([[channel.platformChannelId, channel]]));
+  }
+
+  /**
+   * The channel's playlists, as series membership for the videos inside them.
+   *
+   * A creator putting videos in a playlist is them saying those videos belong
+   * together, which no amount of title-guessing matches. Read once per channel
+   * behind the same quota gate as the backfill.
+   */
+  async fetchSeries(channel: ChannelRef): Promise<SeriesAssignment[]> {
+    const params = new URLSearchParams({
+      part: 'snippet,contentDetails',
+      channelId: channel.platformChannelId,
+      maxResults: '50',
+    });
+
+    const body = await this.get<ListResponse<YouTubePlaylist>>(
+      'playlists',
+      params,
+      COST.playlists,
+    );
+
+    const playlists = (body?.items ?? [])
+      .filter((p) => (p.contentDetails?.itemCount ?? 0) >= SERIES_MIN_ITEMS)
+      // Largest first: those are the series, and the budget stops partway down.
+      .sort((a, b) => (b.contentDetails?.itemCount ?? 0) - (a.contentDetails?.itemCount ?? 0))
+      .slice(0, SERIES_MAX_PLAYLISTS);
+
+    const out: SeriesAssignment[] = [];
+    const claimed = new Set<string>();
+
+    for (const playlist of playlists) {
+      for (const videoId of await this.readPlaylist(playlist.id)) {
+        // A video can sit in several playlists. The largest wins, which is why
+        // these are walked in size order — and it keeps one video in one series.
+        if (claimed.has(videoId)) continue;
+        claimed.add(videoId);
+        out.push({ platformRef: videoId, seriesId: playlist.id, seriesTitle: playlist.snippet.title });
+      }
+    }
+
+    return out;
+  }
+
+  /** Video ids in one playlist, up to SERIES_MAX_ITEMS. */
+  private async readPlaylist(playlistId: string): Promise<string[]> {
+    const ids: string[] = [];
+    let pageToken: string | undefined;
+
+    while (ids.length < SERIES_MAX_ITEMS) {
+      const params = new URLSearchParams({
+        part: 'contentDetails',
+        playlistId,
+        maxResults: String(Math.min(50, SERIES_MAX_ITEMS - ids.length)),
+      });
+      if (pageToken) params.set('pageToken', pageToken);
+
+      const body = await this.get<ListResponse<PlaylistItem>>(
+        'playlistItems',
+        params,
+        COST.playlistItems,
+      );
+      if (!body) break;
+
+      for (const item of body.items ?? []) {
+        if (item.contentDetails?.videoId) ids.push(item.contentDetails.videoId);
+      }
+
+      pageToken = body.nextPageToken;
+      if (!pageToken || (body.items ?? []).length === 0) break;
+    }
+
+    return ids;
   }
 
   /**

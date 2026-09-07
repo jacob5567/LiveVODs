@@ -10,6 +10,7 @@ import {
 } from '@/drizzle/schema';
 import { HOUR_MS, LIVE_LEAD_MS } from '@/lib/time';
 import { dayBounds, programmeWindow, type Appointment, type LibraryItem } from '@/lib/schedule';
+import { assignSeries, type SeriesInput } from '@/lib/series';
 
 /** How far back and forward the guide loads around "now". */
 export const GUIDE_PAST_MS = 4 * HOUR_MS;
@@ -257,9 +258,32 @@ export function loadGuideWindow(from: Date, to: Date, now: Date = new Date()): G
         : r.endsAt.getTime(),
     }));
 
+    /**
+     * What each programme belongs with, so the row airs a series in a run
+     * rather than dealing it out through the day. Decided here rather than in
+     * the scheduler, which takes no view on what relatedness means — see
+     * lib/series.ts for the order the evidence is trusted in.
+     */
+    const seriesKeys = assignSeries(
+      libraryRows.map(
+        (r): SeriesInput => ({
+          programId: r.id,
+          channelId: r.channelId,
+          title: r.title,
+          category: r.category,
+          platform: byChannel.get(r.channelId)?.platform ?? 'twitch',
+          seriesId: r.seriesId,
+        }),
+      ),
+    );
+
     const library: LibraryItem[] = libraryRows.map((r) => ({
       programId: r.id,
       durationMs: r.endsAt.getTime() - r.startsAt.getTime(),
+      seriesKey: seriesKeys.get(r.id),
+      // Publication order, so a block plays through a series the way it was
+      // made rather than jumping about inside it.
+      sequence: r.startsAt.getTime(),
     }));
 
     const placements = programmeWindow(subject.id, fromMs, toMs, appointments, library);

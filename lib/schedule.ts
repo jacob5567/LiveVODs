@@ -34,6 +34,22 @@ export interface LibraryItem {
   programId: number;
   /** Real length. Items are never stretched or trimmed to fit. */
   durationMs: number;
+  /**
+   * What this belongs with. Items sharing a key are aired in runs rather than
+   * scattered, the way a station gives a series its own slot instead of
+   * dealing episodes at random through the day.
+   *
+   * Deliberately opaque here: deciding what makes two programmes related is a
+   * question about creators and playlists, which is the caller's business.
+   * Absent, an item is its own series and the row behaves exactly as before.
+   */
+  seriesKey?: string;
+  /**
+   * Position within its series, ascending. Episode order where it is known,
+   * publication order otherwise — a block airs in sequence rather than
+   * shuffled, which is what makes it read as a run rather than a jumble.
+   */
+  sequence?: number;
 }
 
 export interface Placement {
@@ -91,6 +107,20 @@ function toParts(item: LibraryItem): Playable[] {
   }));
 }
 
+/** One library item, ready to air, with what it belongs with. */
+interface Recording {
+  parts: Playable[];
+  seriesKey: string;
+  sequence: number;
+  programId: number;
+}
+
+/** Every recording of one series, in the order they should air. */
+interface Cohort {
+  key: string;
+  recordings: Recording[];
+}
+
 /**
  * Carried from one day to the next, which is what removes the seam at midnight.
  *
@@ -114,6 +144,23 @@ export interface Chain {
 
 /** Gaps shorter than this are left empty rather than filled with a sliver. */
 export const MIN_SLOT_MS = 5 * 60_000;
+
+/**
+ * Roughly how long one series holds the row before it hands over.
+ *
+ * A station does not deal single programmes at random; it gives a series a
+ * stretch of the schedule and then moves on. Two hours is about the length of
+ * a block that reads as deliberate without one creator owning the evening.
+ */
+export const BLOCK_TARGET_MS = 2 * 60 * 60_000;
+
+/**
+ * Hard ceiling on a block, in recordings.
+ *
+ * The duration target alone would let a run of very short uploads go on for
+ * twenty episodes. This is what stops a row becoming one channel.
+ */
+export const BLOCK_MAX_RECORDINGS = 4;
 
 /**
  * Days programmed before the window, so the boundaries inside it are already
@@ -166,15 +213,77 @@ function shuffled<T>(items: T[], random: () => number): T[] {
   return out;
 }
 
+/** Collects recordings into series, each in the order it should air. */
+function toCohorts(recordings: Recording[]): Cohort[] {
+  const byKey = new Map<string, Recording[]>();
+  for (const recording of recordings) {
+    const list = byKey.get(recording.seriesKey);
+    if (list) list.push(recording);
+    else byKey.set(recording.seriesKey, [recording]);
+  }
+
+  return [...byKey].map(([key, recs]) => ({
+    key,
+    // Episode order where the caller knew it, publication order otherwise.
+    // programId breaks ties, so the result never depends on insertion order.
+    recordings: recs.sort((a, b) => a.sequence - b.sequence || a.programId - b.programId),
+  }));
+}
+
 /**
- * The endless running order: the library shuffled, then reshuffled each time it
- * is exhausted, so a row does not replay in the same sequence forever. Seeded
- * from the subject and the cycle number, never from the date — the order has to
- * continue across midnight rather than restart there.
+ * One cycle of the running order, dealt as blocks rather than single items.
+ *
+ * Series are shuffled, then take turns: each hands over a run of consecutive
+ * recordings before the next comes up. Round-robin rather than a fresh random
+ * pick each time is what keeps two blocks of the same series apart, and taking
+ * whole recordings rather than individual parts is what keeps a marathon's
+ * parts adjacent.
+ *
+ * With no seriesKey every recording is its own series, every block is one
+ * recording, and this reduces exactly to the plain shuffle it replaces.
+ */
+function blockedOrder(subjectId: number, cohorts: Cohort[], cycle: number): Playable[] {
+  if (cohorts.length === 0) return [];
+
+  const queues = shuffled(cohorts, seededRandom(hashSeed(`${subjectId}:cycle:${cycle}`))).map(
+    (cohort) => ({ recordings: cohort.recordings, at: 0 }),
+  );
+
+  let remaining = queues.reduce((n, q) => n + q.recordings.length, 0);
+  const out: Playable[] = [];
+
+  for (let turn = 0; remaining > 0; turn++) {
+    const queue = queues[turn % queues.length];
+    if (queue.at >= queue.recordings.length) continue;
+
+    let aired = 0;
+    let elapsed = 0;
+    while (
+      queue.at < queue.recordings.length &&
+      aired < BLOCK_MAX_RECORDINGS &&
+      elapsed < BLOCK_TARGET_MS
+    ) {
+      const recording = queue.recordings[queue.at];
+      queue.at += 1;
+      out.push(...recording.parts);
+      elapsed += recording.parts.reduce((n, part) => n + part.durationMs, 0);
+      aired += 1;
+      remaining -= 1;
+    }
+  }
+
+  return out;
+}
+
+/**
+ * The endless running order: the library dealt as blocks, then rebuilt each
+ * time it is exhausted, so a row does not replay in the same sequence forever.
+ * Seeded from the subject and the cycle number, never from the date — the order
+ * has to continue across midnight rather than restart there.
  */
 function itemAt(
   subjectId: number,
-  groups: Playable[][],
+  cohorts: Cohort[],
   length: number,
   index: number,
   cache: Map<number, Playable[]>,
@@ -182,9 +291,7 @@ function itemAt(
   const cycle = Math.floor(index / length);
   let order = cache.get(cycle);
   if (!order) {
-    // Shuffled by recording, then flattened — so the parts of one marathon stay
-    // together and in order rather than being dealt out across the evening.
-    order = shuffled(groups, seededRandom(hashSeed(`${subjectId}:cycle:${cycle}`))).flat();
+    order = blockedOrder(subjectId, cohorts, cycle);
     cache.set(cycle, order);
   }
   return order[index % length];
@@ -253,11 +360,22 @@ export function programmeDay(
   }));
 
   // Nothing is rejected for being long any more; it is broadcast in parts.
-  const groups = library
+  const recordings = library
     .filter((item) => item.durationMs >= MIN_SLOT_MS)
-    .map(toParts)
-    .filter((parts) => parts.every((p) => p.durationMs >= MIN_SLOT_MS));
-  const playlistLength = groups.reduce((n, g) => n + g.length, 0);
+    .map(
+      (item): Recording => ({
+        parts: toParts(item),
+        // No key means it belongs with nothing, so it is a series of one and
+        // the row deals it exactly as it always did.
+        seriesKey: item.seriesKey ?? `program:${item.programId}`,
+        sequence: item.sequence ?? item.programId,
+        programId: item.programId,
+      }),
+    )
+    .filter((recording) => recording.parts.every((p) => p.durationMs >= MIN_SLOT_MS));
+
+  const cohorts = toCohorts(recordings);
+  const playlistLength = recordings.reduce((n, r) => n + r.parts.length, 0);
 
   // Programming resumes wherever the previous day reached, which may be inside
   // this one if a programme ran over.
@@ -329,7 +447,7 @@ export function programmeDay(
       // anything that does. This gap is as full as it is going to get.
       if (skipped >= playlistLength) break;
 
-      const item = itemAt(subjectId, groups, playlistLength, index, cache);
+      const item = itemAt(subjectId, cohorts, playlistLength, index, cache);
       index += 1;
 
       if (at + item.durationMs > ceiling) {

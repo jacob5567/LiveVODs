@@ -402,3 +402,114 @@ describe('persistence bounds', () => {
     }
   });
 });
+
+describe('series ingestion', () => {
+  const makeUpload = (cid: number, ref: string, startsAt: Date) =>
+    m.db
+      .insert(m.programs)
+      .values({
+        channelId: cid,
+        platformRef: ref,
+        title: ref,
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + 30 * 60_000),
+        state: 'aired',
+        canonicalUrl: `https://youtu.be/${ref}`,
+        isUpload: true,
+      })
+      .returning({ id: m.programs.id })
+      .all()[0].id;
+
+  const row = (id: number) =>
+    m.db.select().from(m.programs).where(eqId(m.programs.id, id)).get();
+
+  it('annotates a programme far older than the reconciler window', async () => {
+    const { applySeries } = await import('./persist');
+    // A playlist is mostly old videos, so this has to reach past the seven days
+    // the reconciler works in — otherwise almost nothing would ever be grouped.
+    const ancient = makeUpload(channelId, 'old-vid', new Date(Date.now() - 300 * 24 * 60 * 60_000));
+
+    const changed = applySeries(channelId, [
+      { platformRef: 'old-vid', seriesId: 'PL-x', seriesTitle: 'The Main Series' },
+    ]);
+
+    expect(changed).toBe(1);
+    expect(row(ancient)).toMatchObject({ seriesId: 'PL-x', seriesTitle: 'The Main Series' });
+
+    m.db.delete(m.programs).where(eqId(m.programs.id, ancient)).run();
+  });
+
+  it('does not rewrite a programme whose series has not changed', async () => {
+    const { applySeries } = await import('./persist');
+    // Rewriting bumps updated_at, which moves the guide revision token and
+    // makes every open tab refetch. Re-running the pass must be a no-op.
+    const id = makeUpload(channelId, 'steady-vid', new Date());
+    const assignment = [{ platformRef: 'steady-vid', seriesId: 'PL-y', seriesTitle: 'Steady' }];
+
+    expect(applySeries(channelId, assignment)).toBe(1);
+    const after = row(id)!.updatedAt;
+
+    expect(applySeries(channelId, assignment)).toBe(0);
+    expect(row(id)!.updatedAt).toEqual(after);
+
+    m.db.delete(m.programs).where(eqId(m.programs.id, id)).run();
+  });
+
+  it('waits for the catalogue before grouping it', async () => {
+    const { runSeriesTick } = await import('./poller');
+    const { MemoryQuotaLedger } = await import('./quota');
+    const schema = await import('@/drizzle/schema');
+
+    const seen: string[] = [];
+    const conn = {
+      platform: 'twitch' as const,
+      resolveChannels: async () => new Map(),
+      fetchLive: async () => [],
+      fetchSchedule: async () => [],
+      fetchRecentVods: async () => [],
+      fetchSeries: async (c: { login: string }) => { seen.push(c.login); return []; },
+    };
+
+    // Nothing is backfilled in this fixture yet, so grouping would be grouping
+    // videos that have not been collected — and it would mark them done.
+    m.db.delete(schema.channelSyncState).run();
+    await runSeriesTick(conn, new MemoryQuotaLedger(10_000));
+    expect(seen).toEqual([]);
+
+    m.db
+      .insert(schema.channelSyncState)
+      .values({ channelId, backfilledAt: new Date() })
+      .onConflictDoUpdate({
+        target: schema.channelSyncState.channelId,
+        set: { backfilledAt: new Date() },
+      })
+      .run();
+
+    await runSeriesTick(conn, new MemoryQuotaLedger(10_000));
+    expect(seen).toContain('alice');
+
+    // And once done it is not read again: a playlist does not change enough to
+    // pay for re-reading it.
+    const first = seen.length;
+    await runSeriesTick(conn, new MemoryQuotaLedger(10_000));
+    expect(seen).toHaveLength(first);
+  });
+
+  it('will not start a series pass that would eat the remaining budget', async () => {
+    const { runSeriesTick } = await import('./poller');
+    const { MemoryQuotaLedger } = await import('./quota');
+
+    let called = 0;
+    const conn = {
+      platform: 'twitch' as const,
+      resolveChannels: async () => new Map(),
+      fetchLive: async () => [],
+      fetchSchedule: async () => [],
+      fetchRecentVods: async () => [],
+      fetchSeries: async () => { called += 1; return []; },
+    };
+
+    await runSeriesTick(conn, new MemoryQuotaLedger(100));
+    expect(called).toBe(0);
+  });
+});

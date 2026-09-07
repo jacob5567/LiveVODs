@@ -109,6 +109,17 @@ export const programs = sqliteTable(
     /** Playable id for an aired program: Twitch video id or YouTube video id. */
     vodRef: text('vod_ref'),
     /**
+     * The playlist the creator filed this under, where one was found.
+     *
+     * The scheduler airs a series in a run rather than scattering it, and a
+     * creator's own playlist is the only signal for that which is not a guess.
+     * Null means nothing was collected, and the series is inferred from the
+     * title, the category, or failing both the channel — see lib/series.ts.
+     */
+    seriesId: text('series_id'),
+    /** The playlist's name, for labelling the block on the guide. */
+    seriesTitle: text('series_title'),
+    /**
      * True for an ordinary YouTube upload — library content that was never a
      * broadcast. It still fills a slot on the grid, but its start time is when
      * it was published, not when anything aired.
@@ -140,6 +151,14 @@ export const channelSyncState = sqliteTable('channel_sync_state', {
    * page, which is all that can have changed.
    */
   backfilledAt: integer('backfilled_at', { mode: 'timestamp_ms' }),
+  /**
+   * When this channel's playlists were last read.
+   *
+   * Separate from backfilledAt because it is a different job with a different
+   * cost: playlists cost a unit each to enumerate and a unit per fifty entries
+   * to read, so it runs behind the same quota gate but on its own schedule.
+   */
+  seriesSyncedAt: integer('series_synced_at', { mode: 'timestamp_ms' }),
   /** YouTube uploads playlist id — derived once, then cached forever (saves a unit per poll). */
   youtubeUploadsPlaylistId: text('youtube_uploads_playlist_id'),
   websubExpiresAt: integer('websub_expires_at', { mode: 'timestamp_ms' }),

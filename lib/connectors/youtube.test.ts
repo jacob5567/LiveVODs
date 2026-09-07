@@ -471,3 +471,82 @@ describe('resolveChannels', () => {
     expect(new URL(calls[0]).searchParams.get('forHandle')).toBe('@alice');
   });
 });
+
+describe('reading series from playlists', () => {
+  const playlist = (id: string, title: string, itemCount: number) => ({
+    id,
+    snippet: { title },
+    contentDetails: { itemCount },
+  });
+
+  it('groups the videos in a playlist under it', async () => {
+    mockYouTube({
+      playlists: { items: [playlist('PL-a', 'Deep Dives', 12)] },
+      playlistItems: {
+        items: [
+          { contentDetails: { videoId: 'vid-1' } },
+          { contentDetails: { videoId: 'vid-2' } },
+        ],
+      },
+    });
+
+    const series = await connector().fetchSeries(channel());
+
+    expect(series).toEqual([
+      { platformRef: 'vid-1', seriesId: 'PL-a', seriesTitle: 'Deep Dives' },
+      { platformRef: 'vid-2', seriesId: 'PL-a', seriesTitle: 'Deep Dives' },
+    ]);
+  });
+
+  it('ignores a playlist too small to be a series', async () => {
+    // Two videos in a playlist is a pair, not a run worth giving a row over to.
+    mockYouTube({ playlists: { items: [playlist('PL-tiny', 'Odds and Ends', 2)] } });
+
+    expect(await connector().fetchSeries(channel())).toEqual([]);
+  });
+
+  it('reads the largest playlists first, since those are the real series', async () => {
+    const { calls } = mockYouTube({
+      playlists: {
+        items: [
+          playlist('PL-small', 'Shorts Compilations', 4),
+          playlist('PL-big', 'The Main Series', 90),
+        ],
+      },
+      playlistItems: { items: [{ contentDetails: { videoId: 'vid-1' } }] },
+    });
+
+    await connector().fetchSeries(channel());
+
+    const read = calls.filter((c) => c.includes('/playlistItems?')).map((c) => new URL(c).searchParams.get('playlistId'));
+    expect(read[0]).toBe('PL-big');
+  });
+
+  it('leaves a video in one series when it sits in several playlists', async () => {
+    // The largest playlist claims it, which is why they are walked in order.
+    mockYouTube({
+      playlists: {
+        items: [playlist('PL-big', 'The Main Series', 90), playlist('PL-small', 'Favourites', 5)],
+      },
+      playlistItems: { items: [{ contentDetails: { videoId: 'shared' } }] },
+    });
+
+    const series = await connector().fetchSeries(channel());
+
+    expect(series.filter((s) => s.platformRef === 'shared')).toHaveLength(1);
+    expect(series[0].seriesId).toBe('PL-big');
+  });
+
+  it('is metered like every other call', async () => {
+    mockYouTube({
+      playlists: { items: [playlist('PL-a', 'Deep Dives', 12)] },
+      playlistItems: { items: [{ contentDetails: { videoId: 'vid-1' } }] },
+    });
+
+    const quota = new MemoryQuotaLedger();
+    await connector(quota).fetchSeries(channel());
+
+    // One to enumerate the playlists, one to read the only one worth reading.
+    expect(quota.spent()).toBe(2);
+  });
+});

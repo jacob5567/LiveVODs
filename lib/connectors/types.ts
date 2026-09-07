@@ -30,6 +30,20 @@ export interface QuotaLedger {
   remaining(): number;
 }
 
+/**
+ * One programme's membership of a creator-declared series.
+ *
+ * Kept apart from Observation because it changes no state: the programme is
+ * already known and already in whatever state it belongs in. This only says
+ * what it belongs *with*, which the scheduler uses to air a series in a run.
+ */
+export interface SeriesAssignment {
+  /** The video, as the programme row identifies it. */
+  platformRef: string;
+  seriesId: string;
+  seriesTitle: string;
+}
+
 /** Result of turning a config identifier into something stable. */
 export interface ResolvedChannel {
   platformChannelId: string;
@@ -72,6 +86,17 @@ export interface Connector {
    * its VODs after weeks, so there is no deep history there to collect.
    */
   fetchBackfill?(channel: ChannelRef): Promise<Observation[]>;
+
+  /**
+   * The channel's playlists, as series membership for the videos in them.
+   *
+   * Optional, and YouTube-only: a creator's playlists are the one signal for
+   * what belongs with what that is not a guess. Twitch has no equivalent —
+   * a VOD carries a game but no grouping. Fetched once per channel, like the
+   * backfill, because a playlist is stable enough that re-reading it every day
+   * would spend quota for nothing.
+   */
+  fetchSeries?(channel: ChannelRef): Promise<SeriesAssignment[]>;
 }
 
 /** Split a list into chunks, for endpoints that accept N ids per request. */

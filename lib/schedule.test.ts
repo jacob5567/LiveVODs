@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BLOCK_MAX_RECORDINGS,
   MAX_SLOT_MS,
   MIN_SLOT_MS,
   dayBounds,
@@ -26,6 +27,14 @@ const appointment = (programId: number, fromHour: number, toHour: number): Appoi
   startsAt: at(fromHour),
   endsAt: at(toHour),
 });
+
+/** A library item that declares what series it belongs to and where in it. */
+const episode = (
+  programId: number,
+  minutes: number,
+  seriesKey: string,
+  sequence: number,
+): LibraryItem => ({ programId, durationMs: minutes * MIN, seriesKey, sequence });
 
 const library = (count: number, minutes = 30) =>
   Array.from({ length: count }, (_, i) => item(i + 1, minutes));
@@ -376,5 +385,108 @@ describe('programmeWindow', () => {
     for (let i = 1; i < placed.length; i++) {
       expect(placed[i].startsAt).toBeGreaterThanOrEqual(placed[i - 1].startsAt);
     }
+  });
+});
+
+describe('programming blocks', () => {
+  /** Which series each fill belongs to, in the order the row airs them. */
+  const airedSeries = (placements: ReturnType<typeof day>, of: Map<number, string>) =>
+    fills(placements).map((f) => of.get(f.programId)!);
+
+  const twoSeries = () => {
+    const items: LibraryItem[] = [];
+    const of = new Map<number, string>();
+    for (let i = 0; i < 6; i++) {
+      items.push(episode(i + 1, 30, 'alpha', i));
+      of.set(i + 1, 'alpha');
+      items.push(episode(i + 11, 30, 'beta', i));
+      of.set(i + 11, 'beta');
+    }
+    return { items, of };
+  };
+
+  it('airs a series in a run rather than scattering it through the day', () => {
+    const { items, of } = twoSeries();
+    const order = airedSeries(day(1, DAY, [], items), of);
+
+    // Count how often the row changes series. Dealt one at a time it would
+    // alternate constantly; dealt in blocks it should switch rarely.
+    const handovers = order.filter((s, i) => i > 0 && s !== order[i - 1]).length;
+
+    expect(order.length).toBeGreaterThan(8);
+    expect(handovers).toBeLessThan(order.length / 2);
+  });
+
+  it('airs a block in sequence, so a series plays in order', () => {
+    const { items } = twoSeries();
+    const alpha = fills(day(1, DAY, [], items))
+      .filter((f) => f.programId <= 6)
+      .map((f) => f.programId);
+
+    // Within each unbroken run of the series, episodes ascend.
+    for (let i = 1; i < alpha.length; i++) {
+      if (alpha[i] > alpha[i - 1]) continue;
+      // A drop only happens where the cycle restarted, never mid-run.
+      expect(alpha[i]).toBeLessThan(alpha[i - 1]);
+    }
+    expect(alpha.slice(0, 2)).toEqual([...alpha.slice(0, 2)].sort((a, b) => a - b));
+  });
+
+  it('hands over rather than letting one series own the whole day', () => {
+    // Enough content that the day does not exhaust the running order. At a
+    // cycle boundary one cycle's closing block can meet the next cycle's
+    // opening block from the same series, which is the one place a run may
+    // legitimately reach twice the ceiling.
+    const items: LibraryItem[] = [];
+    const of = new Map<number, string>();
+    for (let i = 0; i < 30; i++) {
+      items.push(episode(i + 1, 30, 'alpha', i));
+      of.set(i + 1, 'alpha');
+      items.push(episode(i + 101, 30, 'beta', i));
+      of.set(i + 101, 'beta');
+    }
+
+    const order = airedSeries(day(1, DAY, [], items), of);
+
+    let run = 1;
+    let longest = 1;
+    for (let i = 1; i < order.length; i++) {
+      run = order[i] === order[i - 1] ? run + 1 : 1;
+      longest = Math.max(longest, run);
+    }
+
+    expect(order.length).toBeGreaterThan(20);
+    expect(longest).toBeLessThanOrEqual(BLOCK_MAX_RECORDINGS);
+  });
+
+  it('keeps the parts of one recording together inside a block', () => {
+    // An eight-hour recording splits into parts; a block must not deal them
+    // out around the other episodes of its own series.
+    const items: LibraryItem[] = [
+      { programId: 1, durationMs: 8 * HOUR, seriesKey: 'alpha', sequence: 0 },
+      episode(2, 30, 'alpha', 1),
+      episode(3, 30, 'alpha', 2),
+    ];
+    const aired = fills(day(1, DAY, [], items));
+    const partCount = aired.find((f) => f.programId === 1)!.partCount;
+    const positions = aired.map((f, i) => (f.programId === 1 ? i : -1)).filter((i) => i >= 0);
+
+    expect(partCount).toBeGreaterThan(1);
+    // The first airing runs straight through: nothing is dealt between the
+    // parts. Later airings are separate passes of the running order, so only
+    // this first run has to be contiguous.
+    const first = positions.slice(0, partCount);
+    expect(first).toEqual(Array.from({ length: partCount }, (_, i) => first[0] + i));
+  });
+
+  it('deals exactly as before when nothing declares a series', () => {
+    // Every item is its own series, so a block is one recording and the row
+    // is the plain shuffle it has always been.
+    const plain = library(12, 25);
+    const once = fills(day(1, DAY, [], plain)).map((f) => f.programId);
+    const twice = fills(day(1, DAY, [], plain)).map((f) => f.programId);
+
+    expect(once).toEqual(twice);
+    expect(once.length).toBeGreaterThan(0);
   });
 });

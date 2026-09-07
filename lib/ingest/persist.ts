@@ -7,6 +7,7 @@
 import { and, eq, gt, inArray, like, lt, not, notInArray, or } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { channels, programs, subjectChannels } from '@/drizzle/schema';
+import type { SeriesAssignment } from '@/lib/connectors/types';
 import type { ProgramRecord, Write } from './reconcile';
 
 /** How far back a finished program stays in the reconciler's working set. */
@@ -201,4 +202,68 @@ export function closeUntrackedPrograms(now: Date = new Date()): number {
     .run();
 
   return ended.changes;
+}
+
+/** Refs per statement, well under any SQLite variable limit. */
+const REF_BATCH = 500;
+
+/**
+ * Records which series each programme belongs to.
+ *
+ * Separate from the reconciler, which is a state machine: this changes no
+ * state and creates no rows. It only annotates programmes that already exist,
+ * and it has to reach the whole back catalogue rather than the recent window
+ * the reconciler works in — a playlist is mostly old videos.
+ */
+export function applySeries(
+  channelId: number,
+  assignments: SeriesAssignment[],
+  now: Date = new Date(),
+): number {
+  if (assignments.length === 0) return 0;
+
+  const byRef = new Map(assignments.map((a) => [a.platformRef, a]));
+  const refs = [...byRef.keys()];
+  const held: Array<{ id: number; platformRef: string; seriesId: string | null }> = [];
+
+  for (let i = 0; i < refs.length; i += REF_BATCH) {
+    held.push(
+      ...db
+        .select({
+          id: programs.id,
+          platformRef: programs.platformRef,
+          seriesId: programs.seriesId,
+        })
+        .from(programs)
+        .where(
+          and(
+            eq(programs.channelId, channelId),
+            inArray(programs.platformRef, refs.slice(i, i + REF_BATCH)),
+          ),
+        )
+        .all(),
+    );
+  }
+
+  // Only rows whose series actually changes. Rewriting one bumps updated_at,
+  // which moves the guide revision token and makes every open tab refetch — a
+  // whole catalogue of no-op writes would do that for nothing.
+  const changed = held.filter((row) => byRef.get(row.platformRef)?.seriesId !== row.seriesId);
+  if (changed.length === 0) return 0;
+
+  db.transaction((tx) => {
+    for (const row of changed) {
+      const assignment = byRef.get(row.platformRef)!;
+      tx.update(programs)
+        .set({
+          seriesId: assignment.seriesId,
+          seriesTitle: assignment.seriesTitle,
+          updatedAt: now,
+        })
+        .where(eq(programs.id, row.id))
+        .run();
+    }
+  });
+
+  return changed.length;
 }
