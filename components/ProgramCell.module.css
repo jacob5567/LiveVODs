@@ -47,7 +47,6 @@
   filter: brightness(1.25);
 }
 
-
 .title {
   font-size: calc(13.5px * var(--ui-scale));
   font-weight: 600;
@@ -131,6 +130,16 @@
 
 .avatar {
   object-fit: cover;
+}
+
+/*
+ * A bar in the icon tier is 22-54px wide, and .cell's own 9px of padding either
+ * side eats up to 18 of that — enough to clip the picture to a sliver on a
+ * third of them. The tier shows one centred 16px circle and no text, so the
+ * padding has nothing left to protect.
+ */
+.iconOnly {
+  padding-inline: 2px;
 }
 
 .initials {

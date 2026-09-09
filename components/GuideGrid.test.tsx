@@ -462,6 +462,42 @@ describe('reading a row at rest', () => {
     expect(container.querySelector('[class*="initials"]')?.textContent).toBe('AL');
     expect(screen.queryByText('A Very Long Programme Title')).toBeNull();
   });
+
+  it('fetches the creator picture at once, and at the size it is drawn', () => {
+    // A window holds hundreds of these from a few dozen channels, so deferring
+    // them saves nothing — and a deferred fetch inside a horizontally scrolled
+    // lane is exactly how a bar ends up scrolling into view still empty.
+    const g = guide();
+    g.subjects[0].slots = [
+      {
+        ...slot(30, 'A Very Long Programme Title', NOW, NOW + 10 * MIN),
+        channelAvatarUrl: 'https://yt3.ggpht.com/abc=s240-c-k-c0x00ffffff-no-rj',
+      },
+    ];
+    const { container } = render(<GuideGrid guide={g} />);
+
+    const img = container.querySelector<HTMLImageElement>('[class*="avatar"]')!;
+    expect(img.getAttribute('loading')).toBeNull();
+    expect(img.getAttribute('src')).toBe('https://yt3.ggpht.com/abc=s88-c-k-c0x00ffffff-no-rj');
+  });
+
+  it('gives the picture the bar\'s padding, which would otherwise clip it', () => {
+    const g = guide();
+    g.subjects[0].slots = [
+      {
+        ...slot(30, 'Narrow', NOW, NOW + 10 * MIN),
+        channelAvatarUrl: 'https://yt3.ggpht.com/abc=s240-c-k-c0x00ffffff-no-rj',
+      },
+      // Wide enough for a title: keeps its padding, since text needs it.
+      slot(31, 'Wide Enough For A Title', NOW + 20 * MIN, NOW + 80 * MIN),
+    ];
+    const { container } = render(<GuideGrid guide={g} />);
+
+    const narrow = container.querySelector('[data-program="30"]')!;
+    const wide = container.querySelector('[data-program="31"]')!;
+    expect(narrow.className).toMatch(/iconOnly/);
+    expect(wide.className).not.toMatch(/iconOnly/);
+  });
 });
 
 describe('zoom', () => {

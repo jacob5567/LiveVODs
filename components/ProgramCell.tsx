@@ -1,9 +1,10 @@
-'use client';
+"use client";
 
-import type { GuideSlot } from '@/lib/guide';
-import { MINUTE_MS } from '@/lib/time';
-import type { GridMetrics } from '@/lib/metrics';
-import styles from './ProgramCell.module.css';
+import { avatarAtIconSize } from "@/lib/avatar";
+import type { GuideSlot } from "@/lib/guide";
+import { MINUTE_MS } from "@/lib/time";
+import type { GridMetrics } from "@/lib/metrics";
+import styles from "./ProgramCell.module.css";
 
 /**
  * Below this a bar has no room for a title. Scaled with the interface, since
@@ -28,8 +29,9 @@ const CELL_PADDING_PX = 18;
 /** "Adam Savage's Tested" → "AS". Two letters is all a narrow bar can hold. */
 function initialsOf(name: string): string {
   const words = name.split(/\s+/).filter(Boolean);
-  if (words.length === 0) return '';
-  const letters = words.length === 1 ? words[0].slice(0, 2) : words[0][0] + words[1][0];
+  if (words.length === 0) return "";
+  const letters =
+    words.length === 1 ? words[0].slice(0, 2) : words[0][0] + words[1][0];
   return letters.toUpperCase();
 }
 
@@ -54,10 +56,13 @@ export function ProgramCell({
   const endsAfter = slot.endsAt > viewportEnd;
 
   const left = Math.max(0, px(slot.startsAt - viewportStart));
-  const right = Math.min(px(viewportEnd - viewportStart), px(slot.endsAt - viewportStart));
+  const right = Math.min(
+    px(viewportEnd - viewportStart),
+    px(slot.endsAt - viewportStart),
+  );
   const width = Math.max(2, right - left);
 
-  const isLive = slot.state === 'live' && slot.isAppointment;
+  const isLive = slot.state === "live" && slot.isAppointment;
   const roomForLabel = width >= MIN_LABEL_PX * metrics.uiScale;
   const roomForIcon = !roomForLabel && width >= MIN_ICON_PX * metrics.uiScale;
 
@@ -70,6 +75,9 @@ export function ProgramCell({
   if (startsBefore) classes.push(styles.clippedStart);
   if (endsAfter) classes.push(styles.clippedEnd);
   if (selected) classes.push(styles.selected);
+  // At this width the bar is almost entirely padding, and the picture it exists
+  // to show would be clipped to a sliver. Give the icon the room instead.
+  if (roomForIcon) classes.push(styles.iconOnly);
 
   /**
    * A row pools several creators, so the bar has to say whose programme it is —
@@ -87,7 +95,7 @@ export function ProgramCell({
     slot.category,
   ]
     .filter(Boolean)
-    .join(' · ');
+    .join(" · ");
 
   return (
     /**
@@ -96,7 +104,7 @@ export function ProgramCell({
      * control, and must not take focus of its own.
      */
     <div
-      className={classes.join(' ')}
+      className={classes.join(" ")}
       style={{ left, width: Math.max(width, 2) }}
       data-program={slot.programId}
       // The grid delegates hover from the rows container, so a bar only has to
@@ -106,11 +114,28 @@ export function ProgramCell({
     >
       {roomForIcon &&
         (slot.channelAvatarUrl ? (
+          /**
+           * Deliberately not `loading="lazy"`. A window holds a few hundred of
+           * these drawn from only about forty-five distinct channels, so the
+           * browser fetches each one once and serves the rest from cache — and
+           * asked for at icon size they are a couple of kilobytes each. Lazy
+           * loading saves nothing against that and costs the thing the tier
+           * exists for: a bar that scrolls into view holding nothing, because
+           * it sits inside a horizontally scrolled lane where the deferred
+           * fetch is the least reliable.
+           */
           // eslint-disable-next-line @next/next/no-img-element
-          <img className={styles.avatar} src={slot.channelAvatarUrl} alt="" loading="lazy" />
+          <img
+            className={styles.avatar}
+            src={avatarAtIconSize(slot.channelAvatarUrl)}
+            alt=""
+            decoding="async"
+          />
         ) : (
           // No picture stored — the creator's initials still say whose it is.
-          <span className={styles.initials}>{initialsOf(slot.channelName)}</span>
+          <span className={styles.initials}>
+            {initialsOf(slot.channelName)}
+          </span>
         ))}
 
       {roomForLabel && (
@@ -123,8 +148,8 @@ export function ProgramCell({
           style={
             {
               maxWidth: Math.max(0, width - CELL_PADDING_PX * metrics.uiScale),
-              '--bar-left': `${left}px`,
-              '--bar-width': `${width}px`,
+              "--bar-left": `${left}px`,
+              "--bar-width": `${width}px`,
             } as React.CSSProperties
           }
         >
