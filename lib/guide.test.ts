@@ -216,6 +216,25 @@ describe('appointments versus library', () => {
     insertProgram(-60 * 24 * 2, -60 * 24 * 2 + 30, { ref: 'past' });
     expect(slots().every((s) => s.isAppointment || !s.endsAtProvisional)).toBe(true);
   });
+
+  it('drops a scheduled slot that never aired, and fills the gap from the library', () => {
+    // A stream announced for right now, then a library item to fill the row
+    // with — the only thing that could occupy this window if the missed
+    // appointment is really gone rather than just hidden.
+    insertProgram(-10, 50, { state: 'missed', ref: 'no-show', title: 'Never Happened' });
+    insertProgram(-60 * 24 * 6, -60 * 24 * 6 + 60, { ref: 'filler' });
+
+    const guide = guideNow();
+    expect(guide.subjects[0].slots.some((s) => s.title === 'Never Happened')).toBe(false);
+
+    // The missed window is covered by something else, not left blank — a gap
+    // in the appointment query is exactly the room the library scheduler fills.
+    const covering = guide.subjects[0].slots.find(
+      (s) => s.startsAt <= at(0).getTime() && s.endsAt > at(0).getTime(),
+    );
+    expect(covering).toBeDefined();
+    expect(covering!.isAppointment).toBe(false);
+  });
 });
 
 describe('a broadcast that is still running', () => {
