@@ -210,9 +210,12 @@ describe('going offline', () => {
 
     const writes = reconcile([running], [{ kind: 'offline', channelId: CHANNEL }], NOW);
 
+    // endsAt snaps to the moment offline was detected rather than keeping
+    // whatever the last live poll happened to leave it at.
     expect(updates(writes)[0].patch).toEqual({
       state: 'aired',
       endsAtProvisional: false,
+      endsAt: NOW,
     });
   });
 
@@ -221,6 +224,28 @@ describe('going offline', () => {
     const writes = reconcile([aired], [{ kind: 'offline', channelId: CHANNEL }], NOW);
 
     expect(writes).toHaveLength(0);
+  });
+
+  it('does not let the just-started floor outlive the broadcast', () => {
+    // MIN_LIVE_BAR_MS holds a just-started stream's provisional end open so it
+    // is wide enough to see and click while still running — a floor on a
+    // guess, not a claim about how long the broadcast actually turns out to
+    // last. A stream that stops before that floor is reached must not have
+    // the floor become its permanently recorded duration.
+    let rows: ProgramRecord[] = [];
+    let nextId = 1;
+    const apply = (observations: Observation[], now: Date) => {
+      for (const write of reconcile(rows, observations, now)) {
+        if (write.op === 'insert') rows.push({ id: nextId++, ...write.row });
+        else rows = rows.map((r) => (r.id === write.id ? { ...r, ...write.patch } : r));
+      }
+    };
+
+    apply([live({ startedAt: at(0) })], at(0));
+    // Really stops three minutes in — well inside the fifteen-minute floor.
+    apply([{ kind: 'offline', channelId: CHANNEL }], at(3));
+
+    expect(rows[0].endsAt).toEqual(at(3));
   });
 });
 

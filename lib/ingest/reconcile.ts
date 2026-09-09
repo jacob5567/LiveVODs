@@ -331,8 +331,15 @@ export function reconcile(
   function applyOffline(obs: OfflineObservation) {
     for (const row of channelRows(obs.channelId)) {
       if (row.current.state !== 'live') continue;
-      // endsAt keeps the last provisional value, which the live path re-pegged to
-      // `now` on every poll — the closest estimate we have of when it stopped.
+      // Re-peg to `now` rather than trust whatever endsAt was last set to.
+      // Ordinarily those are the same thing — the live path pegs it to `now`
+      // on every poll — but MIN_LIVE_BAR_MS holds that peg open for the first
+      // fifteen minutes so a just-started stream is wide enough to see and
+      // click. A broadcast that stops inside that window must not have the
+      // floor become its permanently recorded duration: without this, a
+      // three-minute stream would be stored, scheduled, and played back as a
+      // fifteen-minute one.
+      row.current.endsAt = now;
       row.current.state = 'aired';
       row.current.endsAtProvisional = false;
     }
